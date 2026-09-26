@@ -53,7 +53,7 @@ for file in "$dstskin/"*; do
 		fi
 
 		# compile the xml source
-		if [ -f "$dstskin/$skin/skin.xml" ]; then
+		if [ -f "$srcskin/$skin/skin.xml" ]; then
 			echo "compiling $dstskin/$skin/skin.xml..."
 			"$scriptdir/xmlinc" "$srcskin/$skin/skin.xml" "$dstskin/$skin/skin.xml" "$dstskin/$skin" "$cmnskin/$skin"
 			sed -i 's/%PLUGIN%/'$domain'/g' "$dstskin/$skin/skin.xml"

@@ -5,7 +5,7 @@ An enigma2 skin is natively just a flat XML file: no includes, no macros, no rel
 
 Modern enigma2 distributions add some more advanced features like includes, templates, panels. But those only provide limited support for hierarchical design with reusable building blocks. As those skin elements are rendered directly on the box on the fly, those shortcomings were probably required due to limited box processing power. This can be avoided by using an offline skin compiler.
 
-SkinForge doesn't change what enigma2 itself understands — it compiles a richer source down to the plain, flat XML enigma2 actually loads. There are 3 levels of languages that simplify skin design:
+SkinForge doesn't change what enigma2 itself understands — it compiles a richer source down to the plain, flat XML enigma2 actually loads. There are 3 levels of languages on top of XML that simplify skin design:
 
 These are the implemented language hierarchy levels:
 
@@ -227,7 +227,6 @@ cell:
 ```
 
 - **Three field kinds cover every real template in this codebase**: `text` (from `MultiContentEntryText`), `icon` (from `MultiContentEntryPixmapAlphaBlend`, or `MultiContentEntryPixmapAlphaTest` — marked with a `variant: "AlphaTest"` key, omitted for the far more common Blend case), `progress` (from `MultiContentEntryProgress`) — each only when the call has exactly the plain kwarg set observed in practice. Anything else (`Rectangle`, `LinearGradient*`, `ProgressPixmap`, or a call with an unusual extra kwarg like `cornerRadius`) falls back to a `raw` field carrying the untouched `{call, args?, kwargs?}` shape described below — never lossy, it just doesn't get the readability upgrade. A `text` field's `font:` is itself optional — some plugins omit `font=` and let enigma2 default it, and that's preserved as an absent key rather than forced to a guessed value.
-- **The empty-text border trick is recognized and hidden**: a `MultiContentEntryText(text="", border_width=..., border_color=...)` spanning the cell (the common way to draw a cell's frame) is pulled out of `fields:` entirely into `cell.border` and `cell.width`.
 - **`cell.fonts` is the source template's `"fonts"` list, kept verbatim, same order, same positions** — not deduplicated or renumbered, and never dropped, even for an entry no `font=N` anywhere in the template currently points to. `font=N` is a positional reference something outside this one `<convert>` block may rely on, so round-tripping must never renumber or delete a slot just because nothing here currently uses it. A plain two-arg `gFont(family, size)` entry renders as the same `"Family;Size"` string every `font:` reference elsewhere uses (as above); anything else (e.g. `parseFont(...)`) falls back to the verbose `{call, args}` form, still inside `fonts:`.
 - **`cell.vars` covers `TemplatedMultiContentEx`'s local-variable feature** — some plugins declare a `"var": (name := expr, ...)` tuple of walrus-bound values ahead of `"template"` and reference them throughout its `pos=`/`size=` expressions (grid math shared across several rows/columns, computed once). Preserved as an ordered list of the exact binding text, since order matters (a later binding can reference an earlier one by name) and the right-hand side is an arbitrary Python expression, not typed data. Each entry accepts either `name := expr` or the more natural-looking `name = expr` — always compiled back out as `:=`, the only valid syntax inside the `"var": (...)` tuple literal itself:
 
@@ -281,10 +280,6 @@ The YAML dialect above still has no way to say "repeat this six times" — the `
 
 A `for` item missing `var`, `range`, or `body` is left untouched in the output rather than silently dropped — `yml2xml`/`xmlinc` don't understand a `for:` key, so a malformed loop fails loudly downstream instead of quietly disappearing.
 
-### Including another `.zmlinc` file
-
-An `<xmlinc file="...">` reference is free to name another `.zmlinc` fragment (one that itself uses `for`) exactly like it would name a `.ymlinc` one — `zml2yml` rewrites `file: "X.zmlinc"` to `file: "X.ymlinc"` in the output, including one found inside an expanded `for` body. This mirrors `yml2xml.py`'s own `file: "X.ymlinc"` → `file="X.xmlinc"` rewrite one layer down (see [Backward compatibility](#backward-compatibility-the-xml-compiler-xmlinc)): by the time `yml2xml`/`xmlinc` run, only the compiled sibling exists on disk, so the reference has to point there rather than at the source fragment. It's a rewrite, not a fetch — the referenced `.zmlinc` file still needs to be expanded in its own right, which `zml2ymldomain` already does for every `.zmlinc` file it finds regardless of who references it.
-
 ### Usage
 
 ```
@@ -292,9 +287,9 @@ zmlcompile <domain> [srcbase] [dstbase] [cmnbase]
 ```
 Same signature as `ymlcompile` (see [Quick start](#quick-start)). It expands any changed `*.zmlinc` source — in both the plugin's own tree and the shared `Common` tree — to `.yml`/`.ymlinc` via `zml2ymldomain`, then hands off to `ymlcompile` for the rest. `zml2ymldomain` is the per-domain building block it calls, taking `<domain-or-.> [skin] [base]` like `yml2xmldomain` does; use `zml2yml.py -i <file>` directly to expand a single file in isolation.
 
-## Backward compatibility: the XML+ compiler (`xmlinc`)
+## The foundation: XML+ compiler (`xmlinc`)
 
-`xmlinc` reads a skin source file that mixes ordinary enigma2 XML with a small set of extra constructs, resolves all of it, and writes out a single plain XML file with nothing left in it that enigma2 wouldn't understand natively. This is the original SkinForge authoring language; `xmlcompile` drives it end-to-end for a plugin whose source is written directly in XML+ rather than YAML.
+`xmlinc` reads a skin source file that mixes ordinary enigma2 XML with a small set of extra constructs, resolves all of it, and writes out a single plain XML file with nothing left in it that enigma2 wouldn't understand natively.
 
 ### What it resolves
 
@@ -329,18 +324,10 @@ Same signature as `ymlcompile` (see [Quick start](#quick-start)). It expands any
 
   centers that include horizontally, whatever width its content actually adds up to. The name is fixed, not per-file, so each `<xmlinc>` overwrites it — only reliable for the include that was *just* processed (this one, on its own `position=`, or the very next thing after it), not an earlier sibling.
 - **Global variables** — `<global name="x" value="y"/>` defines `$x`; `<screen size="w,h" .../>` implicitly defines `$screen_width`/`$screen_height` for the whole file. `$vars` don't need to be their own token — `picon$index` substitutes just the `$index` part, so variables can be embedded in literals.
-- **Colors, checked at compile time** — any `...Color="name"` attribute is validated against colors declared via `<color name="x" value="y"/>` (normally collected from a shared `screenpart_colors.xmlinc`) plus a small built-in list of names the device's own base skin already defines (`black`, `white`, `background`, ...). An unknown color name — almost always a typo — fails loudly at compile time instead of silently rendering wrong on the box:
-  ```
-  ERROR: color hilite not defined
-  ```
+- **Colors, checked at compile time** — any `...Color="name"` attribute is validated against colors declared via `<color name="x" value="y"/>` (normally collected from a shared `screenpart_colors.xmlinc`)
 - **Per-tag defaults** — `<default tag="widget" zPosition="1" transparent="1" .../>` (normally collected from a shared `screenpart_defaults.xmlinc`, the same way colors are) fills in any attribute a `widget` element doesn't set itself; an attribute the element *does* set always wins. This is for a uniform look across plugins — change a value in one shared file instead of on every widget in every screen. `tag` can optionally be narrowed to one `render` variant, e.g. `<default tag="widget[render=Label]" font="$FB_medium"/>` only fills widgets whose own `render="Label"` — since a plain `tag="widget"` block otherwise applies to every widget regardless of what it renders (Label, Pixmap, ProgressBar, ...). A render-specific block and a plain `tag="widget"` block can coexist: for a given attribute, the render-specific one wins if it sets that attribute, the plain one fills anything still unset, and the element's own attributes always win over both. Defaults are matched by tag name (plus optional `render`) only — no per-screen targeting — and, like colors, only take effect once the file declaring them has actually been reached via an `<xmlinc>` include — conventionally near the top of `skin.yml`/`skin.xml`, alongside `screenpart_colors`/`screenpart_fonts`. A `<default>` element itself never appears in the compiled output.
 - **Formula evaluation** — `eval(...)` runs the enclosed expression as real arithmetic, so positions and sizes can be computed instead of hand-calculated: `eval(($width-100)/2)` centers a 100px-wide element. Division is automatically treated as integer (floor) division since pixel coordinates can't be fractional; if a formula still produces a float (e.g. from a scaling ratio) the result is rounded to the nearest pixel rather than truncated.
-- **Font/size sanity check** — every widget with both a `font` and a `size` is checked against a minimum-line-height heuristic; a `size` too short for its `font` produces a warning identifying the screen, widget, font variable, and both values, catching text that would otherwise render clipped on the actual device:
-
-  ```
-  WARNING: screen=MyScreen screen_h=1080 widget=title font=$FB_medium size: 30 < font: 37.33333333333333
-  ```
-
+- **Font/size sanity check** — every widget with both a `font` and a `size` is checked against a minimum-line-height heuristic; a `size` too short for its `font` produces a warning identifying the screen, widget, font variable, and both values, catching text that would otherwise render clipped on the actual device.
 - **Verbatim passthrough** — an include named `applet_*` is inlined as raw text without any of the above processing, for embedding pre-rendered or foreign XML snippets unchanged.
 
 ### Usage
@@ -375,7 +362,6 @@ Just clone the repo and add the git dir to the PATH variable:
 ```
 git clone git@github.com:xcentaurix/SkinForge.git
 ```
-
 
 ## Limitations
 - Tested on OpenViX and OpenATV with DM900.

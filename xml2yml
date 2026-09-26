@@ -3,7 +3,9 @@ src=$1
 dst=$2
 
 if [ -z "$1" ]; then
-	echo "$0 <source file> [destination file]"
+	for src in *.xml*; do
+		python "$(dirname "$0")"/src/xml2yml.py -i $src
+	done
 elif [ -z "$2" ]; then
 	python "$(dirname "$0")"/src/xml2yml.py -i $src
 else

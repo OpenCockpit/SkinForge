@@ -1,8 +1,23 @@
 #!/bin/bash
-src="$1"
-dst="$2"
+if [ -z "$2" ]; then
+	domain=$(getdomain $1)
+	if [ -z $domain ]; then
+		exit 1
+	fi
+	src="$HOME/git/rel/$domain/src/skin/default/skin.xml"
+	dst="$HOME/git/rel/$domain/src/skin/default/skin.svg"
+else
+	src="$1"
+	dst="$2"
+fi
+
 if [ -z "$src" ] || [ -z "$dst" ]; then
 	echo "$0 <compiled skin.xml> <dst .svg file>"
 	exit 1
 fi
-python "$(dirname "$0")"/src/xml2svg.py -i "$src" -o "$dst"
+
+if [ -f "$src" ]; then
+	python "$(dirname "$0")"/src/xml2svg.py -i "$src" -o "$dst"
+else
+	echo no $src available
+fi

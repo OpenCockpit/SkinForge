@@ -72,6 +72,7 @@ RAW_KWARG_KEYS = {"call", "flags", "direction"}
 INDENT = "\t"
 BARE_VAR_RE = re.compile(r"^\$\w+$")
 FORMULA_OP_RE = re.compile(r"[+\-*/]")
+IMAGE_FILE_RE = re.compile(r"\.(?:png|svg|jpg)$", re.IGNORECASE)
 
 YAML_ESCAPES = {"\\": "\\", '"': '"', "n": "\n", "t": "\t", "r": "\r"}
 
@@ -317,12 +318,16 @@ def wrapEval(value):
     with no arithmetic at all (e.g. name="picon$index", a plain per-cell
     substitution real skins use - see this module's docstring) all pass
     through untouched. Every real eval() in this codebase does contain an
-    operator; nothing here is guessed without that evidence."""
+    operator; nothing here is guessed without that evidence.
+
+    A segment ending in an image extension is a file path (e.g.
+    "IS_HD:$imagepath/icon_hd.png"), whose "/" is a directory separator,
+    not division - never a formula."""
     if not isinstance(value, str) or "$" not in value:
         return value
     segments = value.split(",")
     wrapped = [
-        seg if BARE_VAR_RE.match(seg.strip()) or "$" not in seg or not FORMULA_OP_RE.search(seg)
+        seg if BARE_VAR_RE.match(seg.strip()) or "$" not in seg or not FORMULA_OP_RE.search(seg) or IMAGE_FILE_RE.search(seg.strip())
         else f"eval({seg})"
         for seg in segments
     ]
@@ -436,7 +441,15 @@ def renderConvertTemplate(body):
 
     pairs = []
     if "fonts" in body:
-        fonts = ", ".join(pyCall(unwrap(f)) for f in body["fonts"])
+        # pyVal, not pyCall: a fonts[] entry is either a gFont-call dict
+        # (pyVal dispatches that to pyCall(), same as before) or a plain
+        # string - either an already-resolved "Family;Size" literal, or an
+        # unresolved "$var" symbolic reference (see internFonts()) that
+        # needs to stay a quoted Python string literal so xmlinc.py's later
+        # textual $-substitution can replace it in place without breaking
+        # the surrounding list syntax. pyCall() alone would crash on a bare
+        # string (it indexes ["call"] unconditionally).
+        fonts = ", ".join(pyVal(unwrap(f)) for f in body["fonts"])
         pairs.append(f'"fonts": [{fonts}]')
     for key in ("itemHeight", "itemWidth"):
         if key in body:
@@ -532,15 +545,29 @@ def internFonts(cell):
         for i, raw_entry in enumerate(cell["fonts"]):
             font_entry = unwrap(raw_entry)
             if isinstance(font_entry, str):
-                family, size = font_entry.split(";")
-                font_index.setdefault(font_entry, i)
-                font_entry = {"call": "gFont", "args": [family, int(size)]}
-                # A raw field with kwargs outside the domain "text" shape
-                # keeps its own font inlined as this same {call, args} dict
-                # (toDomainField's font-inlining) rather than the "Family;
-                # Size" string, and looks it up by that dict's repr -
-                # register it too so that lookup still finds this slot.
-                font_index.setdefault(repr(font_entry), i)
+                if ";" in font_entry:
+                    family, size = font_entry.split(";")
+                    font_index.setdefault(font_entry, i)
+                    font_entry = {"call": "gFont", "args": [family, int(size)]}
+                    # A raw field with kwargs outside the domain "text" shape
+                    # keeps its own font inlined as this same {call, args} dict
+                    # (toDomainField's font-inlining) rather than the "Family;
+                    # Size" string, and looks it up by that dict's repr -
+                    # register it too so that lookup still finds this slot.
+                    font_index.setdefault(repr(font_entry), i)
+                else:
+                    # Symbolic reference (e.g. "$F_medium", a <global> name
+                    # declared elsewhere, like fonts.ymlinc) - yml2xml.py
+                    # never sees <global> values (xmlinc.py resolves those
+                    # later, as a generic textual $-substitution pass over
+                    # the compiled XML - see its resolveValue()), so there's
+                    # no "Family;Size" to split here. Leave it as the bare
+                    # string, same as any other $var elsewhere in this file
+                    # (wrapEval/BARE_VAR_RE): xmlinc.py's substitution turns
+                    # it into the real "Family;Size" string in place, which
+                    # this fontKey()'s own docstring already treats as an
+                    # equally valid font-entry form alongside a gFont() call.
+                    font_index.setdefault(font_entry, i)
             else:
                 if font_entry.get("call") == "gFont" and len(font_entry.get("args", [])) == 2:
                     family, size = font_entry["args"]
