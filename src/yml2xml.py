@@ -564,10 +564,14 @@ def internFonts(cell):
                     # no "Family;Size" to split here. Leave it as the bare
                     # string, same as any other $var elsewhere in this file
                     # (wrapEval/BARE_VAR_RE): xmlinc.py's substitution turns
-                    # it into the real "Family;Size" string in place, which
-                    # this fontKey()'s own docstring already treats as an
-                    # equally valid font-entry form alongside a gFont() call.
+                    # it into the real "Family;Size" string in place. The
+                    # runtime needs a gFont object in fonts[], not a bare
+                    # string, so the entry is wrapped in parseFont(), which
+                    # TemplatedMultiContent's eval namespace provides and
+                    # which turns that string into a gFont. The fields keep
+                    # referring to it by the symbolic name.
                     font_index.setdefault(font_entry, i)
+                    font_entry = {"call": "parseFont", "args": [font_entry]}
             else:
                 if font_entry.get("call") == "gFont" and len(font_entry.get("args", [])) == 2:
                     family, size = font_entry["args"]

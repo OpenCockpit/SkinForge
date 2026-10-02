@@ -13,7 +13,9 @@ base="${3:-$GIT_DEV}"
 git="$base/$domain"
 echo git: $git
 
-for file in $git/src/skin/*.*yml* $git/src/skin/$skin/*.*yml*; do
+# Only the full documents (skin.yml -> skin.xml). The .ymlinc includes are not converted into the
+# source tree any more: xmlinc.py generates the .xmlinc it needs on demand, into a temp dir.
+for file in $git/src/skin/*.yml $git/src/skin/$skin/*.yml; do
 	if [ -f "$file" ]; then
 		echo "Processing $file..."
 		python "$(dirname "$0")"/src/yml2xml.py -i "$file"

@@ -19,7 +19,8 @@ The latter three (XML+, YAML, ZAML) share the same compiler and the same `Common
 ```mermaid
 flowchart TD
     ZML[".zml / .zmlinc<br/>ZAML source"] -->|zml2ymldomain| YML
-    YML[".yml / .ymlinc<br/>YAML source"] -->|yml2xmldomain| XMLP
+    YML[".yml / .ymlinc<br/>YAML source"] -->|"yml2xmldomain (.yml only)"| XMLP
+    YML -.->|"on demand, temp .xmlinc"| FLAT
     HAND["hand-written XML+"] -.-> XMLP
     XMLP[".xml / .xmlinc<br/>XML+ source"] -->|"xmlprettydomain, then xmlinc"| FLAT
     COMMON[("Common/<br/>shared building blocks")] -.->|resolved by xmlinc| FLAT
@@ -360,8 +361,17 @@ Everything below operates on already-flat XML (or SVG) and doesn't involve the `
 Just clone the repo and add the git dir to the PATH variable:
 
 ```
-git clone git@github.com:xcentaurix/SkinForge.git
+git clone git@github.com:OpenCockpit/SkinForge.git
 ```
+
+## .xmlinc files are generated on demand
+
+`.xmlinc` includes are not kept in git. When `xmlinc` (`src/xmlinc.py`) looks for an
+include `foo.xmlinc` and finds none, it converts the `foo.ymlinc` next to where it would
+be (`yml2xml`, then `xmlpretty`) into a temporary directory, uses that, and removes the
+directory when it exits. A real `.xmlinc` file still wins if one exists (hand-written
+includes keep working). `yml2xmldomain` now only converts the full `.yml` documents
+(`skin.yml` -> `skin.xml`).
 
 ## Limitations
 - Tested on OpenViX and OpenATV with DM900.

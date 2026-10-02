@@ -3,11 +3,61 @@
 
 
 import argparse
+import atexit
 import math
 import os
 import re
+import shutil
 import sys
+import tempfile
 from FileUtils import readFile, writeFile
+
+
+# .xmlinc files are generated from their .ymlinc source and not kept in git:
+# when the include search finds no .xmlinc, the .ymlinc beside it is
+# converted (yml2xml, then xmlpretty - the same two steps ymlcompile used to
+# run into the source tree) into a temporary directory that is removed when
+# this run ends.
+_generated_xmlinc = {}   # source .ymlinc path -> generated temp .xmlinc path
+_generated_dir = None
+
+
+def _removeGeneratedDir():
+    if _generated_dir:
+        shutil.rmtree(_generated_dir, ignore_errors=True)
+
+
+def generateXmlinc(xmlinc_path):
+    """Return the path of a temporary .xmlinc generated from the .ymlinc that
+    belongs to *xmlinc_path*, or None if there is no such .ymlinc."""
+    global _generated_dir  # pylint: disable=global-statement
+    base, ext = os.path.splitext(xmlinc_path)
+    if ext != ".xmlinc":
+        return None
+    yml_path = base + ".ymlinc"
+    if not os.path.isfile(yml_path):
+        return None
+    key = os.path.normpath(yml_path)
+    if key in _generated_xmlinc:
+        return _generated_xmlinc[key]
+
+    from yml2xml import yml2xml    # imported here: only needed on demand
+    from xmlpretty import process_file
+
+    if _generated_dir is None:
+        _generated_dir = tempfile.mkdtemp(prefix="xmlinc_")
+        atexit.register(_removeGeneratedDir)
+    # one sub-directory per source keeps the real file name (callers look at
+    # it, e.g. the "applet_" and "Summary" checks) while same-named files
+    # from different dirs (a plugin's override of a Common file) never collide
+    out_dir = os.path.join(_generated_dir, str(len(_generated_xmlinc)))
+    os.makedirs(out_dir)
+    out = os.path.join(out_dir, os.path.basename(base) + ".xmlinc")
+    print(f"==> generating {out} from {yml_path}")
+    writeFile(out, yml2xml(readFile(yml_path), False))
+    process_file(out, out)
+    _generated_xmlinc[key] = out
+    return out
 
 
 def toInt(s):
@@ -305,24 +355,22 @@ class XMLInclude:
             inc_filename += ".xmlinc"
         print(f"inc_filename: {inc_filename}")
 
-        inc_file = os.path.join(self.srcdir, inc_filename)
-        print(f"inc_file 1: {inc_file}")
+        # Same search order as always: the source dir, its parent, the common
+        # dir, its parent. In each one a real .xmlinc wins; failing that, a
+        # .ymlinc next to where it would be is converted on demand (the
+        # .xmlinc files are generated build intermediates, not kept in git).
+        search_dirs = (self.srcdir, os.path.dirname(self.srcdir),
+                       self.cmndir, os.path.dirname(self.cmndir))
+        for i, directory in enumerate(search_dirs, 1):
+            inc_file = os.path.join(directory, inc_filename)
+            print(f"inc_file {i}: {inc_file}")
+            if os.path.exists(inc_file):
+                return inc_file
+            generated = generateXmlinc(inc_file)
+            if generated:
+                return generated
 
-        if not os.path.exists(inc_file):
-            inc_file = os.path.join(os.path.dirname(self.srcdir), inc_filename)
-            print(f"inc_file 2: {inc_file}")
-
-            if not os.path.exists(inc_file):
-                inc_file = os.path.join(self.cmndir, inc_filename)
-                print(f"inc_file 3: {inc_file}")
-
-                if not os.path.exists(inc_file):
-                    inc_file = os.path.join(os.path.dirname(self.cmndir), inc_filename)
-                    print(f"inc_file 4: {inc_file}")
-
-                    if not os.path.exists(inc_file):
-                        print(f"ERROR: inc file: {inc_file} not found.")
-
+        print(f"ERROR: inc file: {inc_file} not found.")
         return inc_file
 
     def resolveVar(self, var):
