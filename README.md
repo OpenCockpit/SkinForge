@@ -162,6 +162,11 @@ screen:
         position: "0,$screen_height-48"
 ```
 
+## Visual Inspection
+For visual inspection a screen layout graphic is generated during skin compile.
+
+![Screenshot](TVMagazineCockpit.svg)
+
 ## Quick start
 
 ```
