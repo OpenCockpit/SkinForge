@@ -7,6 +7,7 @@ import argparse
 import re
 import xml.etree.ElementTree as ET
 from xml.dom import minidom
+from xml.sax.saxutils import escape
 from FileUtils import readFile, writeFile
 
 
@@ -38,6 +39,15 @@ def process_file(src_file, dst_file):
     xml_string = "\n".join(lines)
     tree = ET.ElementTree(ET.fromstring(xml_string))
     root = tree.getroot()
+    # An <applet>'s text is python code: its indentation is significant, so it must
+    # come out exactly as it went in. The pretty-printing below (and remove_root(),
+    # which strips one leading tab from every line) would eat that indentation -
+    # set the text aside behind a placeholder and put it back at the very end.
+    applet_texts = []
+    for applet in root.iter("applet"):
+        if applet.text and applet.text.strip():
+            applet_texts.append(applet.text)
+            applet.text = f"@@APPLET_TEXT_{len(applet_texts) - 1}@@"
     try:
         xml_string = ET.tostring(root, encoding="unicode", method="xml")
         xml_string = minidom.parseString(
@@ -122,6 +132,8 @@ def process_file(src_file, dst_file):
         lines = remove_root(lines)
     xml_string = "\n".join(lines)
     xml_string = xml_string.replace("&quot;", '"')
+    for i, text in enumerate(applet_texts):
+        xml_string = xml_string.replace(f"@@APPLET_TEXT_{i}@@", escape(text))
     xml_string += "\n"
     # print(xml_string)
     writeFile(dst_file, xml_string)

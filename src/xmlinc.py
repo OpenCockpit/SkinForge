@@ -81,6 +81,12 @@ def addMix(v1, v2):
     return r
 
 
+# <panel position=...> keywords that name a layout slot instead of a
+# coordinate pair - an offset must leave them alone ("top" + 0,0 would
+# otherwise be written out as "top,0", which enigma2 no longer recognises).
+LAYOUT_POSITIONS = {"fill", "top", "bottom", "left", "right"}
+
+
 class Pos():
     def __init__(self, x, y=0):
         if isinstance(x, str):
@@ -536,7 +542,7 @@ class XMLInclude:
         for n in nodes:
             if not isinstance(n, Element):
                 continue
-            if "position" in n.attrs and n.attrs["position"] != "fill":
+            if "position" in n.attrs and n.attrs["position"] not in LAYOUT_POSITIONS:
                 n.attrs["position"] = str(pos + Pos(n.attrs["position"]))
             if n.children:
                 self.offsetPositions(n.children, pos)
@@ -595,6 +601,12 @@ class XMLInclude:
         self.scanColors(inc_doc)
         self.scanDefaults(inc_doc)
 
+        # size= exposes $width/$height only for the duration of this include:
+        # they are put back afterwards, so the enclosing file's own
+        # $width/$height (and anything resolved against them, like this
+        # include's position=) are not clobbered by a nested include's size.
+        saved_size = (self.globals.get("$width"), self.globals.get("$height"))
+
         resolved_attrs = {}
         for key, value in attrs.items():
             if key in {"file", "position"}:
@@ -609,6 +621,13 @@ class XMLInclude:
         self.checkFonts(resolved_attrs)
 
         result = self.processFile(level + 1, inc_file)
+
+        if "size" in attrs:
+            for var, val in zip(("$width", "$height"), saved_size):
+                if val is None:
+                    self.globals.pop(var, None)
+                else:
+                    self.globals[var] = val
 
         # Auto-expose the included content's own intrinsic bounding box as
         # $child_width/$child_height, so a parent can size/position things
@@ -644,6 +663,19 @@ class XMLInclude:
         elif isinstance(result, Element):
             self.offsetPositions(result, pos2)
         return result
+
+    @staticmethod
+    def unwrapScreens(result):
+        """Replace every <screen> element in an include's result (one element
+        or a list) by that screen's own children."""
+        items = result if isinstance(result, list) else [result]
+        out = []
+        for item in items:
+            if isinstance(item, Element) and item.tag == "screen":
+                out.extend(item.children or [])
+            else:
+                out.append(item)
+        return out
 
     def processElement(self, level, node):
         """Returns the processed replacement for one element - a single
@@ -735,12 +767,21 @@ class XMLInclude:
                 result = self.processElement(level, child)
                 if result is None:
                     continue
+                if child.tag == "xmlinc" and node.tag != "skin":
+                    # An include inside another element is a panel-style
+                    # reference (<panel name="X"/> in the original skin): when
+                    # the included file is a whole <screen name="X"> definition,
+                    # its content - not the <screen> wrapper - belongs here.
+                    result = self.unwrapScreens(result)
                 if isinstance(result, list):
                     new_children.extend(result)
                 else:
                     new_children.append(result)
 
-        new_text = self.resolveValue(self.normalizeText(node.text)) if node.text is not None else None
+        if node.tag == "applet":
+            new_text = node.text   # python code: leave it exactly as written
+        else:
+            new_text = self.resolveValue(self.normalizeText(node.text)) if node.text is not None else None
         return Element(node.tag, new_attrs, new_children, new_text)
 
     def processFile(self, level, afile):
