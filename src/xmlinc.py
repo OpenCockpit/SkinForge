@@ -77,6 +77,8 @@ def addMix(v1, v2):
         r = v2
     else:
         return v1 + v2
+    if v1 == 0 or v2 == 0:
+        return r  # a zero offset leaves a symbolic position (center, e-58, ...) untouched
     print(f"==> addMix: ERROR: cannot add non-numeric position values {v1!r} + {v2!r}, keeping {r!r}")
     return r
 
@@ -85,6 +87,14 @@ def addMix(v1, v2):
 # coordinate pair - an offset must leave them alone ("top" + 0,0 would
 # otherwise be written out as "top,0", which enigma2 no longer recognises).
 LAYOUT_POSITIONS = {"fill", "top", "bottom", "left", "right"}
+
+# Rendered line height per unit of the skin's font size: the font's own line
+# height (ascent+descent+gap, per em) times the "scale" percentage declared in
+# fonts.xmlinc (enigma2 renders at size*scale/100). Regular = DejaVuSans @89%,
+# Bold = Roboto-Bold @71%; CAID/Fixed/Console are rendered at 100%. Unknown
+# families keep the old conservative 4/3.
+FONT_LINE_HEIGHT = {"Regular": 1.036, "Bold": 0.832, "CAID": 1.104, "Fixed": 1.125, "Console": 1.201}
+FONT_LINE_HEIGHT_DEFAULT = 4.0 / 3.0
 
 
 class Pos():
@@ -471,11 +481,15 @@ class XMLInclude:
         font_size = font_parts[1]
         try:
             size_height = attrs["size"].split(",")[1]
-            if float(size_height) < float(font_size) * 4.0 / 3.0:
+            if float(size_height) == 0:
+                return  # 0 = sized at runtime by the screen's code (or a hidden placeholder)
+            factor = FONT_LINE_HEIGHT.get(font_parts[0].strip(), FONT_LINE_HEIGHT_DEFAULT)
+            required = math.ceil(float(font_size) * factor)
+            if float(size_height) < required:
                 widget = attrs.get("name") or attrs.get("source") or "?"
                 fontvar = self.last_font_var or "(literal)"
                 screen_h = self.globals.get("$screen_height", "?")
-                print(f"WARNING: screen={self.current_screen} screen_h={screen_h} widget={widget} font={fontvar} size: {size_height} < font: {float(font_size) * 4.0 / 3.0}")
+                print(f"WARNING: screen={self.current_screen} screen_h={screen_h} widget={widget} font={fontvar} size: {size_height} < font: {required}")
         except Exception:
             pass
 
