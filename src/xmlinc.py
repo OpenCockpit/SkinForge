@@ -60,6 +60,9 @@ def generateXmlinc(xmlinc_path):
     return out
 
 
+ANCHOR_RE = re.compile(r"^([ec])([+-]\d+)?$")
+
+
 def toInt(s):
     try:
         i = int(s)
@@ -79,6 +82,12 @@ def addMix(v1, v2):
         return v1 + v2
     if v1 == 0 or v2 == 0:
         return r  # a zero offset leaves a symbolic position (center, e-58, ...) untouched
+    num = v2 if isinstance(v1, str) else v1
+    m = ANCHOR_RE.match(r)
+    if m and isinstance(num, int):
+        # "e" (end of parent) / "c" (center) anchors take an offset as e+N / e-N
+        total = int(m.group(2) or 0) + num
+        return m.group(1) + (f"{total:+d}" if total else "")
     print(f"==> addMix: ERROR: cannot add non-numeric position values {v1!r} + {v2!r}, keeping {r!r}")
     return r
 
@@ -285,7 +294,7 @@ class XmlParser:
             self.skipSpace()
             attrs[name] = self.parseAttrValue()
 
-        children, text = self.parseContent()
+        children, text = self.parseContent(attrs.get("nostrip") in ("1", "true", "True"))
         if not self.text.startswith("</", self.pos):
             self.fail(start, f"unclosed tag <{tag}>, expected a matching </{tag}>")
         self.pos += 2
@@ -299,7 +308,7 @@ class XmlParser:
         self.pos += 1
         return Element(tag, attrs, children, text)
 
-    def parseContent(self):
+    def parseContent(self, nostrip=False):
         children = []
         text_parts = []
         while True:
@@ -320,7 +329,9 @@ class XmlParser:
             self.pos = next_lt
         if children:
             return children, None
-        text = "".join(text_parts).strip()
+        text = "".join(text_parts)
+        if not nostrip:  # enigma2's own nostrip="1": leading/trailing whitespace is significant (e.g. a separator like "  •  ")
+            text = text.strip()
         return None, (text if text else None)
 
 
@@ -494,7 +505,7 @@ class XMLInclude:
             pass
 
     def checkColor(self, key, value):
-        if not key.endswith("Color"):
+        if not key.endswith("Color") or key == "spacingColor":  # spacingColor is a pixel gap, not a color
             return
         if value.startswith("#") or value.startswith("$") or value == "":
             return

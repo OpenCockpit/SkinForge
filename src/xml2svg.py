@@ -24,8 +24,9 @@ import os
 import sys
 import json
 import argparse
+import tempfile
 from FileUtils import readFile, writeFile
-from xmlinc import XmlParser, Element, Comment, XmlParseError
+from xmlinc import XmlParser, Element, Comment, XmlParseError, XMLInclude
 
 # A non-visual tag at screen level: metadata, not something with an on-screen
 # box to draw.
@@ -270,7 +271,10 @@ def wrapFragmentAsScreen(nodes, name, explicitSize):
     need to know the difference. A single already-<screen> node is passed
     through as-is (it already carries its own size)."""
     if len(nodes) == 1 and isinstance(nodes[0], Element) and nodes[0].tag == "screen":
-        return nodes[0]
+        screen = nodes[0]
+        if explicitSize and not (screen.attrs.get("size") or screen.attrs.get("resolution")):
+            screen.attrs["size"] = ",".join(explicitSize.lower().split("x"))
+        return screen
     if explicitSize:
         w, h = (int(v) for v in explicitSize.lower().split("x"))
     else:
@@ -338,10 +342,57 @@ def parseArgs(argv):
     parser.add_argument("-o", dest="dst", required=True, help="output .svg file")
     parser.add_argument("--size", dest="size", help="WxH (e.g. 615x740) to use as the canvas for a bare "
                                                       "fragment - defaults to the computed bounding box of its own elements")
+    parser.add_argument("-c", dest="common", help="common dir for <xmlinc> resolution (source input only) - defaults to the input's own dir")
+    parser.add_argument("--include", dest="includes", action="append", default=[],
+                         help="source file(s) to process first, so their <global>/<color> defs (e.g. fonts.xmlinc, "
+                              "colors.xmlinc) are known while resolving the input - repeatable")
+    parser.add_argument("--compile", dest="compile", action="store_true",
+                         help="resolve <xmlinc>/$var/eval() first even if the input doesn't look like a source "
+                              "file (always done automatically for *.xmlinc and for any input containing <xmlinc>/<global>)")
     parser.add_argument("--colors", dest="colors", action="append", default=[],
                          help="file(s) to scan for <color name=... value=.../> defs (e.g. screenpart_colors.xmlinc) "
                               "to resolve named colors a bare fragment doesn't carry itself - repeatable")
     return parser.parse_args(argv)
+
+
+SOURCE_TAGS = {"xmlinc", "global", "default", "layout"}
+
+
+def containsSourceTags(nodes):
+    """True if the tree still has <xmlinc>/<global>/... - i.e. it's an
+    uncompiled source file that needs xmlinc.py's resolution first."""
+    for n in nodes if isinstance(nodes, list) else [nodes]:
+        if not isinstance(n, Element):
+            continue
+        if n.tag in SOURCE_TAGS or (n.children and containsSourceTags(n.children)):
+            return True
+    return False
+
+
+def compileSource(src, common, includes, size):
+    """Runs a source file (skin.xml / *.xmlinc, uncompiled) through xmlinc.py's
+    own resolver and returns (parsed result, {color name: value}) - the same
+    result a real build would splice in. size ("WxH") seeds $width/$height
+    and $screen_width/$screen_height, which a bare screenpart inherits from
+    whatever includes it on a real build."""
+    srcdir = os.path.dirname(src)
+    with tempfile.TemporaryDirectory() as tmp:
+        inc = XMLInclude(srcdir, tmp, os.path.normpath(common) if common else srcdir)
+        for inc_file in includes:
+            inc_file = os.path.normpath(inc_file)
+            doc = loadDocument(inc_file)
+            inc.scanColors(doc)  # normally done when a file is pulled in via <xmlinc>
+            inc.scanDefaults(doc)
+            inc.processFile(0, inc_file)
+        if not size:
+            size = "1920x1080"
+            print(f"no --size given, resolving $width/$height as {size} (use --size WxH to change)")
+        if size:
+            w, h = size.lower().split("x")
+            inc.globals.update({"$width": w, "$height": h, "$screen_width": w, "$screen_height": h})
+        result = inc.processFile(0, src)
+    colors = {k.lstrip("$"): v for k, v in inc.colors.items()}
+    return result, colors
 
 
 def loadDocument(path):
@@ -360,6 +411,9 @@ def xml2svg(argv):
     parsed = loadDocument(src)
 
     extraColors = {}
+    if args.compile or src.lower().endswith(".xmlinc") or containsSourceTags(parsed):
+        print("source input (<xmlinc>/$var/eval) - resolving with xmlinc first")
+        parsed, extraColors = compileSource(src, args.common, args.includes, args.size)
     for colorFile in args.colors:
         scanColorsRecursive([parsed_doc] if isinstance(parsed_doc := loadDocument(colorFile), Element) else parsed_doc, extraColors)
 

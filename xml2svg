@@ -1,23 +1,47 @@
 #!/bin/bash
-if [ -z "$2" ]; then
+# xml2svg <domain>
+# xml2svg <compiled skin.xml | source .xmlinc> [dst .svg file] [--size WxH] [--include file ...] [-c commondir]
+# A source file with no dst writes <file>.svg next to it; for a .xmlinc, fonts.xmlinc
+# and colors.xmlinc from the same dir are included automatically if present.
+extra=()
+if [ -f "$1" ]; then
+	src="$1"
+	shift
+	if [ -n "$1" ] && [[ "$1" != -* ]]; then
+		dst="$1"
+		shift
+	else
+		dst="${src%.*}.svg"
+	fi
+	if [[ "$src" == *.xmlinc ]]; then
+		srcdir="$(dirname "$src")"
+		for inc in fonts.xmlinc colors.xmlinc; do
+			[ -f "$srcdir/$inc" ] && extra+=(--include "$srcdir/$inc")
+		done
+		extra+=(-c "$srcdir")
+	fi
+elif [ -z "$2" ]; then
 	domain=$(getdomain $1)
-	if [ -z $domain ]; then
+	if [ -z "$domain" ]; then
+		echo "$0: '$1' is neither a file nor a known domain"
 		exit 1
 	fi
 	src="$HOME/git/rel/$domain/src/skin/default/skin.xml"
 	dst="$HOME/git/rel/$domain/src/skin/default/skin.svg"
+	shift
 else
 	src="$1"
 	dst="$2"
+	shift 2
 fi
 
 if [ -z "$src" ] || [ -z "$dst" ]; then
-	echo "$0 <compiled skin.xml> <dst .svg file>"
+	echo "$0 <compiled skin.xml | source .xmlinc> [dst .svg file] [--size WxH] [--include fonts.xmlinc ...] [-c commondir]"
 	exit 1
 fi
 
 if [ -f "$src" ]; then
-	python "$(dirname "$0")"/src/xml2svg.py -i "$src" -o "$dst"
+	python "$(dirname "$0")"/src/xml2svg.py -i "$src" -o "$dst" "${extra[@]}" "$@"
 else
 	echo no $src available
 fi
