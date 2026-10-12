@@ -349,6 +349,8 @@ def parseArgs(argv):
     parser.add_argument("--compile", dest="compile", action="store_true",
                          help="resolve <xmlinc>/$var/eval() first even if the input doesn't look like a source "
                               "file (always done automatically for *.xmlinc and for any input containing <xmlinc>/<global>)")
+    parser.add_argument("--plugin", dest="plugin", help="plugin name to put in place of the %%PLUGIN%% placeholder of a source "
+                                                         "(the build replaces it in skin.xml with the name of the plugin's directory)")
     parser.add_argument("--colors", dest="colors", action="append", default=[],
                          help="file(s) to scan for <color name=... value=.../> defs (e.g. screenpart_colors.xmlinc) "
                               "to resolve named colors a bare fragment doesn't carry itself - repeatable")
@@ -395,6 +397,21 @@ def compileSource(src, common, includes, size):
     return result, colors
 
 
+def replacePlaceholder(nodes, old, new):
+    """Replaces *old* by *new* in every attribute value and text of the tree, like the sed the build runs on the
+    compiled skin.xml (the placeholder is typically a screen name, which sits in an included file)."""
+    for n in nodes if isinstance(nodes, list) else [nodes]:
+        if not isinstance(n, Element):
+            continue
+        for key, value in n.attrs.items():
+            if old in value:
+                n.attrs[key] = value.replace(old, new)
+        if n.text and old in n.text:
+            n.text = n.text.replace(old, new)
+        if n.children:
+            replacePlaceholder(n.children, old, new)
+
+
 def loadDocument(path):
     try:
         return XmlParser(readFile(path)).parseDocument()
@@ -414,6 +431,8 @@ def xml2svg(argv):
     if args.compile or src.lower().endswith(".xmlinc") or containsSourceTags(parsed):
         print("source input (<xmlinc>/$var/eval) - resolving with xmlinc first")
         parsed, extraColors = compileSource(src, args.common, args.includes, args.size)
+    if args.plugin:
+        replacePlaceholder(parsed, "%PLUGIN%", args.plugin)
     for colorFile in args.colors:
         scanColorsRecursive([parsed_doc] if isinstance(parsed_doc := loadDocument(colorFile), Element) else parsed_doc, extraColors)
 

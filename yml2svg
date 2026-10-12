@@ -1,0 +1,60 @@
+#!/bin/bash
+# yml2svg <source .yml/.ymlinc> [dst .svg file] [--size WxH] [--include file ...] [-c commondir] [--srcdir dir]
+# Draws the layout of a YAML skin source: the source is converted to a temporary .xmlinc (yml2xml) and
+# handed to xml2svg, the temporary file is removed again. With no dst the .svg is written next to the source.
+# Includes (<xmlinc>) are looked up in the directory of the source, or in --srcdir if given; a .ymlinc
+# include is converted on demand like in a real build. fonts, colors, screenpart_fonts, screenpart_colors
+# and screenpart_globals of that directory (.xmlinc, or else .ymlinc) are included automatically if present.
+scriptdir="$(dirname "$0")"
+src="$1"
+if [ -z "$src" ] || [ ! -f "$src" ]; then
+	echo "$0 <source .yml/.ymlinc> [dst .svg file] [--size WxH] [--include file ...] [-c commondir] [--srcdir dir]"
+	exit 1
+fi
+shift
+if [ -n "$1" ] && [[ "$1" != -* ]]; then
+	dst="$1"
+	shift
+else
+	dst="${src%.*}.svg"
+fi
+
+srcdir="$(dirname "$src")"
+args=()
+while [ $# -gt 0 ]; do
+	case "$1" in
+	--srcdir)
+		srcdir="$2"
+		shift 2
+		;;
+	*)
+		args+=("$1")
+		shift
+		;;
+	esac
+done
+
+tmp="$(mktemp -d)" || exit 1
+trap 'rm -rf "$tmp"' EXIT
+mkdir "$tmp/work" "$tmp/inc"
+
+xml="$tmp/work/$(basename "${src%.*}").xmlinc"
+python "$scriptdir"/src/yml2xml.py -i "$src" -o "$xml" || exit 1
+
+extra=()
+for inc in fonts colors screenpart_fonts screenpart_colors screenpart_globals; do
+	if [ -f "$srcdir/$inc.xmlinc" ]; then
+		extra+=(--include "$srcdir/$inc.xmlinc")
+	elif [ -f "$srcdir/$inc.ymlinc" ]; then
+		python "$scriptdir"/src/yml2xml.py -i "$srcdir/$inc.ymlinc" -o "$tmp/inc/$inc.xmlinc" || exit 1
+		extra+=(--include "$tmp/inc/$inc.xmlinc")
+	fi
+done
+
+# %PLUGIN% in a source is the name of the plugin's directory (the build replaces it); not known for the shared Common
+plugin=$("$scriptdir"/getdomain "$(cd "$srcdir" && pwd)")
+if [ -n "$plugin" ] && [ "$plugin" != "Common" ]; then
+	extra+=(--plugin "$plugin")
+fi
+
+python "$scriptdir"/src/xml2svg.py -i "$xml" -o "$dst" -c "$srcdir" "${extra[@]}" "${args[@]}"

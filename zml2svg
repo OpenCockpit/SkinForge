@@ -1,0 +1,74 @@
+#!/bin/bash
+# zml2svg <domain>
+# zml2svg <file> [dst .svg file] [--size WxH] [--include file ...] [-c commondir]
+# Draws the layout of a skin source at the highest language level that is available: for the given file
+# (.zml/.yml/.xml, or .zmlinc/.ymlinc/.xmlinc) the file of the same name with the highest level next to it is used,
+# ZAML before YAML before XML+/XML. It is then drawn by
+#   .zml/.zmlinc  expanded to a temporary .yml/.ymlinc (zml2yml), handed to yml2svg
+#   .yml/.ymlinc  yml2svg (converted to a temporary .xmlinc, handed to xml2svg)
+#   .xml/.xmlinc  xml2svg
+# The temporary files are removed afterwards. With no dst the .svg is written next to the given file; a domain is
+# the compiled skin.xml of the rel tree, like in xml2svg.
+# Includes are taken from the directory of the source as they are there (.ymlinc expanded from a .zmlinc include
+# by zml2ymldomain), see yml2svg.
+. "$(dirname "$0")/common"
+scriptdir="$(dirname "$0")"
+usage="$0 <domain> | <.zml/.yml/.xml/.zmlinc/.ymlinc/.xmlinc file> [dst .svg file] [--size WxH] [--include file ...] [-c commondir]"
+src="$1"
+if [ -z "$src" ]; then
+	echo "$usage"
+	exit 1
+fi
+shift
+if [ ! -f "$src" ]; then
+	domain=$("$scriptdir/getdomain" "$src")
+	if [ -z "$domain" ] || [ ! -d "$GIT_REL/$domain" ]; then
+		echo "$0: '$src' is neither a file nor a known domain"
+		exit 1
+	fi
+	src="$GIT_REL/$domain/src/skin/default/skin.xml"
+	dst="${src%.*}.svg"
+	if [ ! -f "$src" ]; then
+		echo "$0: no $src available"
+		exit 1
+	fi
+elif [ -n "$1" ] && [[ "$1" != -* ]]; then
+	dst="$1"
+	shift
+else
+	dst="${src%.*}.svg"
+fi
+
+base="${src%.*}"
+case "${src##*.}" in
+zml | yml | xml) inc="" ;;
+zmlinc | ymlinc | xmlinc) inc="inc" ;;
+*)
+	echo "$0: '$src' is not a .zml/.yml/.xml or .zmlinc/.ymlinc/.xmlinc file"
+	exit 1
+	;;
+esac
+
+for level in zml yml xml; do
+	if [ -f "$base.$level$inc" ]; then
+		best="$base.$level$inc"
+		break
+	fi
+done
+echo "zml2svg: using $best"
+
+case "$level" in
+xml)
+	exec "$scriptdir/xml2svg" "$best" "$dst" "$@"
+	;;
+yml)
+	exec "$scriptdir/yml2svg" "$best" "$dst" "$@"
+	;;
+zml)
+	tmp="$(mktemp -d)" || exit 1
+	trap 'rm -rf "$tmp"' EXIT
+	yml="$tmp/$(basename "$base").yml$inc"
+	python "$scriptdir"/src/zml2yml.py -i "$best" -o "$yml" || exit 1
+	"$scriptdir"/yml2svg "$yml" "$dst" --srcdir "$(dirname "$src")" "$@"
+	;;
+esac

@@ -414,6 +414,24 @@ class XMLInclude:
             print(f"ERROR: global {var} not found.")
             return var
 
+    def substituteKnownVars(self, text):
+        """Replaces $name by its value, but only for names the skin actually defines (a global
+        or a color): python code may legitimately contain a "$" (a regex, a format string), so
+        an unknown $name is left alone instead of being reported as an error. No eval()
+        handling either - eval(...) in python code is the builtin."""
+        if not text or "$" not in text:
+            return text
+
+        def sub(m):
+            var = m.group(0)
+            if var in self.colors:
+                return self.colors[var]
+            if var in self.globals:
+                return self.globals[var]
+            return var
+
+        return VAR_RE.sub(sub, text)
+
     def normalizeText(self, text):
         """Tightens "kwarg = value" to "kwarg=value" (and "; " to ";") in
         element text content (a <convert> block's Python-source body,
@@ -657,7 +675,7 @@ class XMLInclude:
         # Auto-expose the included content's own intrinsic bounding box as
         # $child_width/$child_height, so a parent can size/position things
         # around an include without hand-maintaining the number (see
-        # README's "Relative positioning" section). Measured against the
+        # the wiki's "The XML+ compiler" page). Measured against the
         # file's own local 0,0-based coordinates - this is meant to be a
         # stable property of the fragment itself ("how big is this
         # content"), not wherever a particular include happens to place
@@ -804,7 +822,8 @@ class XMLInclude:
                     new_children.append(result)
 
         if node.tag == "applet":
-            new_text = node.text   # python code: leave it exactly as written
+            # python code: left exactly as written except for $variables the skin defines
+            new_text = self.substituteKnownVars(node.text)
         else:
             new_text = self.resolveValue(self.normalizeText(node.text)) if node.text is not None else None
         return Element(node.tag, new_attrs, new_children, new_text)

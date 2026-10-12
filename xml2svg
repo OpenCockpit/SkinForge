@@ -35,6 +35,12 @@ else
 	shift 2
 fi
 
+# %PLUGIN% in a source is the name of the plugin's directory (the build replaces it); not known for the shared Common
+plugin=$("$(dirname "$0")"/getdomain "$(cd "$(dirname "$src")" && pwd)")
+if [ -n "$plugin" ] && [ "$plugin" != "Common" ]; then
+	extra+=(--plugin "$plugin")
+fi
+
 if [ -z "$src" ] || [ -z "$dst" ]; then
 	echo "$0 <compiled skin.xml | source .xmlinc> [dst .svg file] [--size WxH] [--include fonts.xmlinc ...] [-c commondir]"
 	exit 1

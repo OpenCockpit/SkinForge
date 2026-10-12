@@ -4,7 +4,7 @@
 
 # The inverse of yml2xml.py: turns plain XML (skin.xml / *.xmlinc) into the
 # YAML dialect (skin.yml / *.ymlinc) yml2xml.py reads. See that file and
-# SkinForge/README.md for the schema itself; this file only needs to walk it
+# the SkinForge wiki ("Authoring in YAML") for the schema itself; this file only needs to walk it
 # in the other direction.
 #
 # Two different parsers are used, each for the right job:
@@ -34,7 +34,7 @@
 #
 # A <convert> block's template isn't rendered as a raw mirror of the Python
 # call syntax - see toDomainCell()/parseConvertTemplate() below and
-# SkinForge/README.md for the domain-level "cell"/"fields" schema this
+# the SkinForge wiki ("Authoring in YAML") for the domain-level "cell"/"fields" schema this
 # produces, hiding MultiContentEntry*/RT_*/font-index plumbing for the shapes
 # actually seen in this codebase (falls back to a lossless "raw" field, same
 # shape as before, for anything that doesn't match one of those shapes).
@@ -401,7 +401,7 @@ def parseConvertTemplate(text):
 
 # ---------------------------------------------------------------------------
 # Domain-level cell schema: hides MultiContentEntry*/RT_*/font-index plumbing
-# for the shapes actually seen in this codebase (see SkinForge/README.md).
+# for the shapes actually seen in this codebase (see the SkinForge wiki, "Authoring in YAML").
 # Anything that doesn't match one of these exact shapes falls back to a "raw"
 # field carrying the untouched {call, args?, kwargs?} - never lossy, just not
 # upgraded. Resolving a tuple-index (value: 0) to a semantic name (startHM)
