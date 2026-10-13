@@ -29,7 +29,10 @@ for file in "$dstskin/"*; do
 	[ -d "$file" ] || continue
 	skin=$(basename "$file")
 
-	if [ ! -f "$srcskin/$skin/skin.xml" ]; then
+	# a skin is the plugin's own source: skin.xml, or the skin.yml/skin.zml it is generated from (a source tree of
+	# a yml/zml based plugin need not keep the generated skin.xml)
+	if [ ! -f "$srcskin/$skin/skin.xml" ] && [ ! -f "$srcskin/$skin/skin.yml" ] && [ ! -f "$srcskin/$skin/skin.zml" ]; then
+		echo "skin: $skin: no skin.xml, skin.yml or skin.zml in $srcskin/$skin, skipping"
 		continue
 	else
 		echo "skin: $skin"
@@ -44,8 +47,8 @@ for file in "$dstskin/"*; do
 		fi
 
 		# convert yml to xml if a *.yml/*.ymlinc changed in src for this variant
-		if [ -n "$(git -C "$srcroot" status --porcelain -- "src/skin/*.yml" "src/skin/*.ymlinc" "src/skin/$skin/*.yml" "src/skin/$skin/*.ymlinc" 2>/dev/null)" ]; then
-			echo "src yml changed, reconverting..."
+		if [ ! -f "$srcskin/$skin/skin.xml" ] || [ -n "$(git -C "$srcroot" status --porcelain -- "src/skin/*.yml" "src/skin/*.ymlinc" "src/skin/$skin/*.yml" "src/skin/$skin/*.ymlinc" 2>/dev/null)" ]; then
+			echo "src yml changed or no skin.xml, reconverting..."
 			(cd "$srcroot" && "$scriptdir/yml2xmldomain" . "$skin" "$srcbase")
 			(cd "$srcroot" && "$scriptdir/xmlprettydomain" . "$skin" "$srcbase")
 		else

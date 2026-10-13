@@ -443,7 +443,7 @@ def xml2svg(argv):
         nodes = parsed if isinstance(parsed, list) else [parsed]
         nodes = [n for n in nodes if not isinstance(n, Comment)]
         if not nodes:
-            print("ERROR: input has no root element")
+            print(f"nothing to draw: {src} has no element of its own (it only defines globals, colors or fonts)")
             return
         name = os.path.splitext(os.path.basename(src))[0]
         screenNode = wrapFragmentAsScreen(nodes, name, args.size)

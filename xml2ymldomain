@@ -14,6 +14,8 @@ git="$base/$domain"
 echo git: $git
 
 for file in $git/src/skin/*.*xml* $git/src/skin/$skin/*.*xml*; do
+	# only .xml and .xmlinc: the glob also matches backups such as skin.xml.org
+	case "$file" in *.xml|*.xmlinc) ;; *) continue ;; esac
 	if [ -f "$file" ]; then
 		echo "Processing $file..."
 		python "$(dirname "$0")"/src/xml2yml.py -i "$file"

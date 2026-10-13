@@ -4,6 +4,8 @@ dst=$2
 
 if [ -z "$1" ]; then
 	for src in *.xml*; do
+		# only .xml and .xmlinc: the glob also matches backups such as skin.xml.org
+		case "$src" in *.xml|*.xmlinc) ;; *) continue ;; esac
 		python "$(dirname "$0")"/src/xml2yml.py -i $src
 	done
 elif [ -z "$2" ]; then

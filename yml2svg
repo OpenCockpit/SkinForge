@@ -42,12 +42,21 @@ xml="$tmp/work/$(basename "${src%.*}").xmlinc"
 python "$scriptdir"/src/yml2xml.py -i "$src" -o "$xml" || exit 1
 
 extra=()
-for inc in fonts colors screenpart_fonts screenpart_colors screenpart_globals; do
+for inc in fonts colors radii screenpart_fonts screenpart_colors screenpart_globals; do
+	[ "$inc" = "$(basename "${src%.*}")" ] && continue   # not the file itself
 	if [ -f "$srcdir/$inc.xmlinc" ]; then
 		extra+=(--include "$srcdir/$inc.xmlinc")
 	elif [ -f "$srcdir/$inc.ymlinc" ]; then
-		python "$scriptdir"/src/yml2xml.py -i "$srcdir/$inc.ymlinc" -o "$tmp/inc/$inc.xmlinc" || exit 1
-		extra+=(--include "$tmp/inc/$inc.xmlinc")
+		# a caller that draws many files of one directory (gitupdateskin) sets YML2SVG_CACHE: converted once there
+		cache="$tmp/inc"
+		if [ -n "$YML2SVG_CACHE" ]; then
+			cache="$YML2SVG_CACHE/$(echo "$srcdir" | tr '/:' '__')"
+			mkdir -p "$cache"
+		fi
+		if [ ! -f "$cache/$inc.xmlinc" ] || [ "$srcdir/$inc.ymlinc" -nt "$cache/$inc.xmlinc" ]; then
+			python "$scriptdir"/src/yml2xml.py -i "$srcdir/$inc.ymlinc" -o "$cache/$inc.xmlinc" || exit 1
+		fi
+		extra+=(--include "$cache/$inc.xmlinc")
 	fi
 done
 

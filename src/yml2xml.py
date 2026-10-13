@@ -104,6 +104,11 @@ class HexInt(int):
     Python literal actually used, not a key-name guess)."""
 
 
+# The elements of a skin that have a text of their own: the Python of an <applet>, the argument of a <convert>. The
+# "text" key of any other element is its text attribute.
+TEXT_BODY_TAGS = {"applet", "convert"}
+
+
 class Commented:
     """Wraps a parsed sequence item together with a standalone comment line
     that preceded it in the source, if any."""
@@ -119,24 +124,36 @@ class Commented:
 
 class YamlParser():
     def __init__(self, text):
+        # entry = (indent, content, is_comment, rest, tabbed): indent counts the leading SPACES only; rest is the line
+        # from there on, exactly as written (a tab and a "#" stay), which is what a "|" block scalar needs - the
+        # Python of an <applet> indents with tabs and has comment lines of its own; tabbed says that tabs are part
+        # of the leading whitespace, which is only legal inside such a block scalar (see parseDocument)
         self.entries = []
+        blank = []   # the whitespace-only lines since the last entry: only a block scalar keeps them
         for raw in text.split("\n"):
+            raw = raw.rstrip("\r")
             stripped = raw.rstrip()
             if not stripped.strip():
+                blank.append(raw)
                 continue
-            if "\t" in stripped[:len(stripped) - len(stripped.lstrip(" \t"))]:
-                print("ERROR: tab used for indentation - YAML indentation must be spaces")
+            tabbed = "\t" in stripped[:len(stripped) - len(stripped.lstrip(" \t"))]
             indent = len(stripped) - len(stripped.lstrip(" "))
             content = stripped.strip()
             is_comment = content.startswith("#")
-            self.entries.append((indent, content[1:].strip() if is_comment else content, is_comment))
+            self.entries.append((indent, content[1:].strip() if is_comment else content, is_comment, raw[indent:], tabbed, blank))
+            blank = []
         self.pos = 0
+        self.scalar_entries = set()   # the entries that are the content of a block scalar
 
     def peek(self):
         return self.entries[self.pos] if self.pos < len(self.entries) else None
 
     def parseDocument(self):
-        return self.parseBlock(0)
+        document = self.parseBlock(0)
+        for i, entry in enumerate(self.entries):
+            if entry[4] and i not in self.scalar_entries:
+                print("ERROR: tab used for indentation - YAML indentation must be spaces")
+        return document
 
     def parseBlock(self, indent):
         i = self.pos
@@ -156,7 +173,7 @@ class YamlParser():
             e = self.peek()
             if e is None or e[0] != indent:
                 break
-            _, content, is_comment = e
+            _, content, is_comment = e[:3]
             if is_comment:
                 pending_comment = content
                 self.pos += 1
@@ -198,7 +215,7 @@ class YamlParser():
             e = self.peek()
             if e is None or e[0] != indent:
                 break
-            _, content, is_comment = e
+            _, content, is_comment = e[:3]
             if is_comment:
                 self.pos += 1  # standalone comments before/between keys aren't tracked
                 continue
@@ -231,8 +248,10 @@ class YamlParser():
             e = self.peek()
             if e is None or e[0] < indent:
                 break
+            self.scalar_entries.add(self.pos)
             self.pos += 1
-            lines.append(" " * (e[0] - indent) + e[1])
+            lines.extend(line[indent:] for line in e[5])   # whitespace-only lines inside the block (not the trailing ones)
+            lines.append(" " * (e[0] - indent) + e[3])
         return "\n".join(lines)
 
     def parseScalar(self, text):
@@ -695,11 +714,13 @@ def renderNode(tag, body, level, lines):
         return
 
     children = body.get("children")
-    if children:
+    if children or tag not in TEXT_BODY_TAGS:
         # A "text" key alongside real children can only be a same-named
         # attribute (e.g. <widget text="UHD">...</widget>) - the special
         # element-own-text-content meaning only applies when there are no
-        # children, mirroring xml2yml.py's mutually exclusive if/elif.
+        # children, mirroring xml2yml.py's mutually exclusive if/elif. And
+        # only an element that has a text body at all (TEXT_BODY_TAGS) can
+        # have it: <eLabel text="NOW"/> is an attribute, not <eLabel>NOW</eLabel>.
         text = None
         attrs = {k: v for k, v in body.items() if k != "children"}
     else:
@@ -725,7 +746,7 @@ def renderNode(tag, body, level, lines):
         # single-line convert's (ClockToText, ServiceTime, ...) text is.
         lines.append(f"{prefix}<{tag}{attr_str}>")
         for line in xmlEscapeText(text).split("\n"):
-            lines.append(f"{prefix}{line}" if line else "")
+            lines.append(line)   # as written: the indentation is part of the body (see xml2yml's verbatimBody)
         lines.append(f"{prefix}</{tag}>")
     elif text is not None:
         lines.append(f"{prefix}<{tag}{attr_str}>{xmlEscapeText(text)}</{tag}>")

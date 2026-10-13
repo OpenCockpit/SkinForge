@@ -88,6 +88,24 @@ class XmlParseError(ValueError):
     module for the rationale."""
 
 
+# The elements whose multi-line text is code (the Python of an <applet>, the template of a <convert> that isn't a
+# TemplatedMultiContent): it is kept exactly as written - tabs, blank lines, trailing spaces - so that converting to YAML
+# and back changes nothing but the whitespace around the body (which xmlpretty sets anyway).
+VERBATIM_TAGS = {"applet", "convert"}
+
+
+def verbatimBody(raw):
+    """*raw* without the blank lines before and after it and the trailing whitespace of its last line - nothing else."""
+    lines = raw.split("\n")
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    if lines:
+        lines[-1] = lines[-1].rstrip()
+    return "\n".join(lines)
+
+
 class XmlParser():
     def __init__(self, text):
         self.text = text
@@ -209,6 +227,13 @@ class XmlParser():
             attrs[name] = self.parseAttrValue()
 
         children, text = self.parseContent()
+        if text is not None:
+            if attrs.get("nostrip") == "1":
+                text = xmlUnescape(text)   # nostrip="1": the leading/trailing whitespace is the value (a separator, ...)
+            elif tag in VERBATIM_TAGS and "\n" in text.strip():
+                text = xmlUnescape(verbatimBody(text))
+            else:
+                text = xmlUnescape(text.strip())
         end_tag_pos = self.pos
         end_tag = self.parseName()
         if end_tag != tag:
@@ -250,8 +275,8 @@ class XmlParser():
 
         if children:
             return children, None
-        text = xmlUnescape("".join(text_parts).strip())
-        return None, (text if text else None)
+        text = "".join(text_parts)
+        return None, (text if text.strip() else None)
 
 
 # ---------------------------------------------------------------------------
@@ -269,51 +294,6 @@ def compactFormula(text):
     - strip that spacing back out so the round trip doesn't introduce diff
     noise."""
     return FORMULA_OP_RE.sub(r"\1", text)
-
-
-def dedentConvertText(text):
-    """A convert type parseConvertTemplate() doesn't recognize (e.g. this
-    codebase's "COCTemplatedMultiContentEx", which has its own "var" key) is
-    preserved as one opaque text blob - but its captured body can carry
-    whatever absolute indentation the source file happened to have, which
-    looks wrong once yml2xml.py re-embeds it under a tag at a different
-    level, or - if this text was captured from a file xmlpretty.py already
-    ran on once - a leading tab per line (its own external, tag-matching
-    indent, from fix_convert_newlines there). The opening line is always
-    glued straight onto ">" at column 0, so it's excluded from every
-    calculation below; a tab elsewhere is normalized to spaces first so
-    textwrap.dedent()'s (and this function's own) indent math, like
-    YamlParser's, only ever has to reason about one indentation unit.
-
-    Two real input shapes reach here, and they need different treatment:
-      - Hand-authored, never xmlpretty'd: the closing bracket sits at the
-        SAME indent as its sibling keys ("var", "template", ...) - this
-        codebase's own real "COCTemplatedMultiContentEx" convention.
-        dedent()'s common-prefix strips them ALL to column 0 together, so
-        nothing distinguishes the keys from "{" anymore - shift the whole
-        body (except that bracket) one level deeper to restore the nesting.
-      - Already xmlpretty'd once: fix_convert_newlines put the closing
-        bracket at the tag's own (shallower) indent, sibling keys one level
-        deeper - dedent() alone already reproduces exactly that relative
-        structure with nothing further needed; shifting again would double
-        it.
-    The discriminator: after dedenting, does any OTHER top-level line also
-    sit at column 0? If so it's the first (hand-authored) case; if the
-    closing bracket is the only column-0 line, it's already correct."""
-    if "\n" not in text:
-        return text
-    first, rest = text.split("\n", 1)
-    lines = textwrap.dedent(rest.replace("\t", "    ")).split("\n")
-
-    def indentOf(line):
-        return len(line) - len(line.lstrip(" "))
-
-    if lines and lines[-1].strip() in {"}", "]", ")"} and indentOf(lines[-1]) == 0:
-        closing = lines.pop().strip()
-        if any(line.strip() and indentOf(line) == 0 for line in lines):
-            lines = [f"    {line}" if line.strip() else line for line in lines]
-        lines.append(closing)
-    return f"{first}\n" + "\n".join(lines)
 
 
 class HexInt(int):
@@ -374,6 +354,7 @@ def parseConvertTemplate(text):
     """Returns a dict body (var/fonts/template/itemHeight/...) if `text` is
     a TemplatedMultiContent(Ex) dict literal, else None (plain text
     convert)."""
+    text = text.strip()   # a body kept as written starts with its own indentation
     try:
         tree = ast.parse(text, mode="eval")
     except SyntaxError:
@@ -766,7 +747,7 @@ def renderBody(tag, attrs, children, text, body_indent, lines):
 
     renderAttrs(tag, attrs, body_indent, lines)
     if text is not None:
-        value = dedentConvertText(text) if tag == "convert" else text
+        value = text
         if "\n" in value:
             # A literal block scalar, not yamlScalar()'s single-line
             # \n/\t-escaped quoted form - that form is unreadable at any

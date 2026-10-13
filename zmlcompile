@@ -28,7 +28,10 @@ for file in "$dstskin/"*; do
 	[ -d "$file" ] || continue
 	skin=$(basename "$file")
 
-	if [ ! -f "$srcskin/$skin/skin.xml" ]; then
+	# a skin is the plugin's own source: skin.xml, or the skin.yml/skin.zml it is generated from (a source tree of
+	# a yml/zml based plugin need not keep the generated skin.xml)
+	if [ ! -f "$srcskin/$skin/skin.xml" ] && [ ! -f "$srcskin/$skin/skin.yml" ] && [ ! -f "$srcskin/$skin/skin.zml" ]; then
+		echo "skin: $skin: no skin.xml, skin.yml or skin.zml in $srcskin/$skin, skipping"
 		continue
 	else
 		echo "skin: $skin"
