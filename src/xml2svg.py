@@ -389,6 +389,7 @@ def compileSource(src, common, includes, size):
         if not size:
             size = "1920x1080"
             print(f"no --size given, resolving $width/$height as {size} (use --size WxH to change)")
+        inc.globals.setdefault("$imagepath", "~")  # a skin defines it itself (display skins: the skin directory)
         if size:
             w, h = size.lower().split("x")
             inc.globals.update({"$width": w, "$height": h, "$screen_width": w, "$screen_height": h})

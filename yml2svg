@@ -3,8 +3,8 @@
 # Draws the layout of a YAML skin source: the source is converted to a temporary .xmlinc (yml2xml) and
 # handed to xml2svg, the temporary file is removed again. With no dst the .svg is written next to the source.
 # Includes (<xmlinc>) are looked up in the directory of the source, or in --srcdir if given; a .ymlinc
-# include is converted on demand like in a real build. fonts, colors, screenpart_fonts, screenpart_colors
-# and screenpart_globals of that directory (.xmlinc, or else .ymlinc) are included automatically if present.
+# include is converted on demand like in a real build. fonts, colors, radii, screenpart_fonts, screenpart_colors,
+# screenpart_globals and display_globals (fonts and colors of a front panel skin) of that directory (.xmlinc, or else .ymlinc) are included automatically if present.
 scriptdir="$(dirname "$0")"
 src="$1"
 if [ -z "$src" ] || [ ! -f "$src" ]; then
@@ -42,7 +42,7 @@ xml="$tmp/work/$(basename "${src%.*}").xmlinc"
 python "$scriptdir"/src/yml2xml.py -i "$src" -o "$xml" || exit 1
 
 extra=()
-for inc in fonts colors radii screenpart_fonts screenpart_colors screenpart_globals; do
+for inc in fonts colors radii screenpart_fonts screenpart_colors screenpart_globals display_globals; do
 	[ "$inc" = "$(basename "${src%.*}")" ] && continue   # not the file itself
 	if [ -f "$srcdir/$inc.xmlinc" ]; then
 		extra+=(--include "$srcdir/$inc.xmlinc")

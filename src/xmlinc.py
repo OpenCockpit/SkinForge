@@ -810,7 +810,7 @@ class XMLInclude:
                 result = self.processElement(level, child)
                 if result is None:
                     continue
-                if child.tag == "xmlinc" and node.tag != "skin":
+                if isinstance(child, Element) and child.tag == "xmlinc" and node.tag != "skin":
                     # An include inside another element is a panel-style
                     # reference (<panel name="X"/> in the original skin): when
                     # the included file is a whole <screen name="X"> definition,

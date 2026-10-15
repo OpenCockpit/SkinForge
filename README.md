@@ -1,6 +1,12 @@
-# SkinForge - Next generation Enigma2 skin design with ZAML/YAML language
+# SkinForge - Next generation Enigma2 skin design
 
-An enigma2 skin is natively just a flat XML file: no includes, no macros, no relative positioning, no variables, no reuse. SkinForge is an offline skin compiler that lets you write skins in a richer, hierarchical language and compiles them down to the plain, flat XML enigma2 actually loads. Shared building blocks (buttons, title bars, colors, ...) live in one place and are reused by all your plugins' skins.
+SkinForge is a skin design kit that encompasses
+- a hierarchical building block concept with
+  - shared building blocks (buttons, title bars, lists, screen parts, ...) that live in one place and are reused by all your plugins
+  - relative positioning of building blocks
+  - global variables
+- an offline skin compiler that lets you write skins in a richer, hierarchical language and compiles them down to the plain, flat XML enigma2 actually loads
+- ZAML/YAML high level skin defintion language plus converters to translate it to/from XML
 
 ## Language levels
 
@@ -45,5 +51,5 @@ The full documentation is in the [SkinForge wiki](https://github.com/OpenCockpit
 - [The XML+ compiler](https://github.com/OpenCockpit/SkinForge/wiki/XML-Plus-Compiler)
 - [Other tools](https://github.com/OpenCockpit/SkinForge/wiki/Other-Tools)
 
-## Limitations
-- Tested on OpenViX and OpenATV with DM900.
+## Wiki
+- https://github.com/xcentaurix/SkinForge/wiki
