@@ -16,7 +16,7 @@ if [ -f "$1" ]; then
 	if [[ "$src" == *.xmlinc ]]; then
 		srcdir="$(dirname "$src")"
 		# the definitions (fonts, colors, radii, ...) every screen of the directory may use, not the file itself
-		for inc in fonts.xmlinc colors.xmlinc radii.xmlinc screenpart_fonts.xmlinc screenpart_colors.xmlinc screenpart_globals.xmlinc display_globals.xmlinc; do
+		for inc in fonts.xmlinc colors.xmlinc radii.xmlinc screenpart_globals.xmlinc display_globals.xmlinc; do
 			[ "$inc" != "$(basename "$src")" ] && [ -f "$srcdir/$inc" ] && extra+=(--include "$srcdir/$inc")
 		done
 		extra+=(-c "$srcdir")

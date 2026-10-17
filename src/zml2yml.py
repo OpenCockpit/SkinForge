@@ -163,7 +163,7 @@ def expandOnce(text):
                     out.append("")
                     continue
                 dedented = bl[shift:] if 0 < shift <= len(bl) else bl
-                out.append(var_re.sub(lambda _m: value, dedented))
+                out.append(var_re.sub(lambda _m, v=value: v, dedented))
 
         i = j
 

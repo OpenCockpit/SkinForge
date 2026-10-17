@@ -57,10 +57,11 @@ def parseCoordinate(s, e, size=0):
         return e
     if s == "*":
         return 0
-    center = (e - size) / 2  # noqa: F841  (bound for eval() below, like skin.py's own)
-    c = e / 2  # noqa: F841
-    w = 0  # noqa: F841  no offline font metrics - see module docstring
-    h = 0  # noqa: F841
+    # center, c, w and h are bound for the eval() below, like skin.py's own; w and h have no offline font metrics (see module docstring)
+    center = (e - size) / 2  # noqa: F841  # pylint: disable=unused-variable
+    c = e / 2  # noqa: F841  # pylint: disable=unused-variable
+    w = 0  # noqa: F841  # pylint: disable=unused-variable
+    h = 0  # noqa: F841  # pylint: disable=unused-variable
     if "w" in s:
         s = s.replace("w", "*w")
     if "h" in s:
@@ -237,7 +238,7 @@ def firstLevelBoundingBox(nodes):
             continue
         pos_attr = node.attrs.get("position")
         size_attr = node.attrs.get("size")
-        if not pos_attr or not size_attr or pos_attr in ("fill",) or size_attr in ("fill",):
+        if not pos_attr or not size_attr or pos_attr == "fill" or size_attr == "fill":
             continue
         try:
             x, y = (int(v) for v in pos_attr.split(","))
@@ -254,7 +255,7 @@ def scanColorsRecursive(nodes, cmap):
     """Collects every <color name=... value=.../> anywhere in the given
     tree (unlike buildColorMap(), which only looks at one element's direct
     children) - for loading colors from a separate file, e.g. a shared
-    screenpart_colors.xmlinc, that a bare fragment doesn't carry itself."""
+    colors.xmlinc, that a bare fragment doesn't carry itself."""
     for n in nodes:
         if not isinstance(n, Element):
             continue
@@ -337,23 +338,23 @@ def renderSvg(root, extraColors=None, fragment=False):
 def parseArgs(argv):
     parser = argparse.ArgumentParser(prog="xml2svg.py")
     parser.add_argument("-i", dest="src", required=True,
-                         help="compiled skin.xml (xmlinc already resolved), or a bare screenpart "
-                              "fragment (e.g. Common/src/skin/screenpart_*.xmlinc) with no <screen> wrapper")
+                        help="compiled skin.xml (xmlinc already resolved), or a bare screenpart "
+                             "fragment (e.g. Common/src/skin/screenpart_*.xmlinc) with no <screen> wrapper")
     parser.add_argument("-o", dest="dst", required=True, help="output .svg file")
     parser.add_argument("--size", dest="size", help="WxH (e.g. 615x740) to use as the canvas for a bare "
-                                                      "fragment - defaults to the computed bounding box of its own elements")
+                                                    "fragment - defaults to the computed bounding box of its own elements")
     parser.add_argument("-c", dest="common", help="common dir for <xmlinc> resolution (source input only) - defaults to the input's own dir")
     parser.add_argument("--include", dest="includes", action="append", default=[],
-                         help="source file(s) to process first, so their <global>/<color> defs (e.g. fonts.xmlinc, "
-                              "colors.xmlinc) are known while resolving the input - repeatable")
+                        help="source file(s) to process first, so their <global>/<color> defs (e.g. fonts.xmlinc, "
+                             "colors.xmlinc) are known while resolving the input - repeatable")
     parser.add_argument("--compile", dest="compile", action="store_true",
-                         help="resolve <xmlinc>/$var/eval() first even if the input doesn't look like a source "
-                              "file (always done automatically for *.xmlinc and for any input containing <xmlinc>/<global>)")
+                        help="resolve <xmlinc>/$var/eval() first even if the input doesn't look like a source "
+                             "file (always done automatically for *.xmlinc and for any input containing <xmlinc>/<global>)")
     parser.add_argument("--plugin", dest="plugin", help="plugin name to put in place of the %%PLUGIN%% placeholder of a source "
-                                                         "(the build replaces it in skin.xml with the name of the plugin's directory)")
+                                                        "(the build replaces it in skin.xml with the name of the plugin's directory)")
     parser.add_argument("--colors", dest="colors", action="append", default=[],
-                         help="file(s) to scan for <color name=... value=.../> defs (e.g. screenpart_colors.xmlinc) "
-                              "to resolve named colors a bare fragment doesn't carry itself - repeatable")
+                        help="file(s) to scan for <color name=... value=.../> defs (e.g. colors.xmlinc) "
+                             "to resolve named colors a bare fragment doesn't carry itself - repeatable")
     return parser.parse_args(argv)
 
 

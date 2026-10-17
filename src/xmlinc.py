@@ -127,7 +127,7 @@ class Pos():
 
 # Base color names defined by the device's own GUI skin (e.g. MetrixHD's
 # skin_base.xml) that are available to every plugin skin without being
-# declared in screenpart_colors.xmlinc. Kept intentionally small - only
+# declared in colors.xmlinc. Kept intentionally small - only
 # names actually verified to exist there, so a real typo or a color that
 # was never defined anywhere still gets flagged.
 KNOWN_BASE_COLORS = {
@@ -294,7 +294,7 @@ class XmlParser:
             self.skipSpace()
             attrs[name] = self.parseAttrValue()
 
-        children, text = self.parseContent(attrs.get("nostrip") in ("1", "true", "True"))
+        children, text = self.parseContent(attrs.get("nostrip") in {"1", "true", "True"})
         if not self.text.startswith("</", self.pos):
             self.fail(start, f"unclosed tag <{tag}>, expected a matching </{tag}>")
         self.pos += 2
@@ -372,6 +372,7 @@ class XMLInclude:
         self.globals = {}
         self.layouts = []
         self.colors = {}
+        self.font_aliases = {}   # <alias name=... font=... size=.../> declarations: name -> (face, size)
         self.defaults = {}
         self.current_screen = "?"
         self.current_file = ""
@@ -505,8 +506,14 @@ class XMLInclude:
         if "font" not in attrs or "size" not in attrs:
             return
         font_parts = attrs["font"].split(";")
+        alias_name = None
         if len(font_parts) <= 1:
-            return
+            # a font alias name (<alias name=... font=... size=.../>) instead of "Face;Size"
+            alias = self.font_aliases.get(attrs["font"].strip())
+            if not alias:
+                return
+            alias_name = attrs["font"].strip()
+            font_parts = [alias[0], alias[1]]
         font_size = font_parts[1]
         try:
             size_height = attrs["size"].split(",")[1]
@@ -516,7 +523,7 @@ class XMLInclude:
             required = math.ceil(float(font_size) * factor)
             if float(size_height) < required:
                 widget = attrs.get("name") or attrs.get("source") or "?"
-                fontvar = self.last_font_var or "(literal)"
+                fontvar = alias_name or self.last_font_var or "(literal)"
                 screen_h = self.globals.get("$screen_height", "?")
                 print(f"WARNING: screen={self.current_screen} screen_h={screen_h} widget={widget} font={fontvar} size: {size_height} < font: {required}")
         except Exception:
@@ -542,6 +549,8 @@ class XMLInclude:
                 continue
             if n.tag == "color" and "name" in n.attrs and "value" in n.attrs:
                 self.colors["$" + n.attrs["name"]] = n.attrs["value"]
+            if n.tag == "alias" and "name" in n.attrs and "font" in n.attrs and "size" in n.attrs:
+                self.font_aliases[n.attrs["name"]] = (n.attrs["font"], n.attrs["size"])
             if n.children:
                 self.scanColors(n.children)
 
