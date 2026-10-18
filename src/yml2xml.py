@@ -367,7 +367,7 @@ def toXmlIncFile(filename):
 
 def renderAttrs(tag, attrs):
     return "".join(
-        f' {k}="{xmlEscapeAttr(wrapEval(toXmlIncFile(v) if tag == "xmlinc" and k == "file" else v))}"'
+        f' {k}="{xmlEscapeAttr(wrapEval(toXmlIncFile(v) if (tag == "xmlinc" and k == "file") or (tag == "screenfamily" and k == "body") else v))}"'
         for k, v in attrs.items()
     )
 

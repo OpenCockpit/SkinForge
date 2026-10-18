@@ -171,9 +171,10 @@ class RawText:
 
 
 class Element:
-    __slots__ = ("tag", "attrs", "children", "text")
+    __slots__ = ("tag", "attrs", "children", "text", "screen_origin")
 
     def __init__(self, tag, attrs, children, text):
+        self.screen_origin = False  # position is relative to the screen, not to a frame (origin="screen")
         self.tag = tag
         self.attrs = attrs          # dict, insertion order = source order
         self.children = children    # list of Element/Comment, or None
@@ -376,6 +377,8 @@ class XMLInclude:
         self.defaults = {}
         self.current_screen = "?"
         self.current_file = ""
+        self.output_size = None  # (xres, yres) of the <resolution> declared by the skin, if any
+        self.frame_origin = None  # Pos of the frame (see processInclude) placed by what was just processed
         self.last_font_var = None
 
     def getIncFilePath(self, inc_filename):
@@ -453,12 +456,37 @@ class XMLInclude:
         would strip formatting nothing downstream can restore."""
         return text.replace(" = ", "=").replace("; ", ";")
 
+    def resolveInOutputSize(self, value):
+        """resolveValue() with $screen_width/$screen_height set to the output size."""
+        saved = (self.globals.get("$screen_width"), self.globals.get("$screen_height"))
+        self.globals["$screen_width"], self.globals["$screen_height"] = self.output_size
+        try:
+            return self.resolveValue(value)
+        finally:
+            for var, val in zip(("$screen_width", "$screen_height"), saved):
+                if val is None:
+                    self.globals.pop(var, None)
+                else:
+                    self.globals[var] = val
+
+    def substituteScreenCenter(self, value):
+        """$screen_center is the centre of the screen along the axis the value is on: in an "x,y"
+        pair the first one is $screen_width/2, the second $screen_height/2."""
+        segments = value.split(",")
+        if len(segments) != 2 or "$screen_width" not in self.globals or "$screen_height" not in self.globals:
+            print(f"ERROR: $screen_center needs an x,y pair and a known screen size, found {value!r}")
+            return value
+        centers = [str(int(self.globals["$screen_width"]) // 2), str(int(self.globals["$screen_height"]) // 2)]
+        return ",".join(re.sub(r"\$screen_center\b", centers[i], seg) for i, seg in enumerate(segments))
+
     def resolveValue(self, value):
         """$var substitution, then eval(...) evaluation, in that order (a
         formula can reference a global by name) - applied to one attribute
         value or text-content string at a time, each fully self-contained
         (an XML-parsed attribute value's boundaries are never ambiguous the
         way they were for the old token-position approach)."""
+        if "$screen_center" in value:
+            value = self.substituteScreenCenter(value)
         if "$" in value:
             value = VAR_RE.sub(lambda m: self.resolveVar(m.group(0)), value)
         if "eval" in value:
@@ -672,7 +700,13 @@ class XMLInclude:
             self.globals["$" + key] = value
         self.checkFonts(resolved_attrs)
 
+        # A file whose root <screen> carries frame="..." is a frame (a window drawn on the screen). The
+        # content of a screen that places a frame is positioned relative to the frame's origin, see
+        # processElement().
+        is_frame = isinstance(inc_doc, Element) and inc_doc.tag == "screen" and "frame" in inc_doc.attrs
+        self.frame_origin = None
         result = self.processFile(level + 1, inc_file)
+        inner_origin = self.frame_origin
 
         if "size" in attrs:
             for var, val in zip(("$width", "$height"), saved_size):
@@ -706,7 +740,15 @@ class XMLInclude:
         # behind, never this one's own size.
         pos2 = pos
         if "position" in attrs:
-            pos2 = pos + Pos(self.resolveValue(attrs["position"]))
+            pos2 = pos + Pos(self.centerPosition(self.resolveValue(attrs["position"]), box))
+
+        # the origin of the frame this include placed, for the screen around it
+        if is_frame:
+            self.frame_origin = pos2
+        elif inner_origin is not None:
+            self.frame_origin = inner_origin + pos2
+        else:
+            self.frame_origin = None
 
         if isinstance(result, list):
             for r in result:
@@ -715,6 +757,20 @@ class XMLInclude:
         elif isinstance(result, Element):
             self.offsetPositions(result, pos2)
         return result
+
+    def centerPosition(self, value, box):
+        """Replaces a "center" component of an include's position by the offset that centres the include's
+        bounding box (box = (width, height), see computeBoundingBox) on the screen."""
+        if "center" not in value:
+            return value
+        if value.strip() == "center":
+            value = "center,center"
+        segments = value.split(",")
+        if len(segments) != 2 or not box or "$screen_width" not in self.globals or "$screen_height" not in self.globals:
+            print(f"ERROR: cannot center an include with position {value!r}, box {box}")
+            return value
+        screen = (int(self.globals["$screen_width"]), int(self.globals["$screen_height"]))
+        return ",".join(str((screen[i] - box[i]) // 2) if seg.strip() == "center" else seg for i, seg in enumerate(segments))
 
     @staticmethod
     def unwrapScreens(result):
@@ -747,6 +803,23 @@ class XMLInclude:
             # by threading a running total down into each recursive call.
             return self.processInclude(level, node, Pos(0, 0))
 
+        if node.tag == "screenfamily":
+            # screens that only differ in name (and title): <screenfamily body="part.xmlinc" ...screen attributes>
+            # with one <screen name=... title=.../> per member. Each becomes a complete screen that includes the
+            # body (at bodyPosition, default 0,0).
+            attrs = dict(node.attrs)
+            body = attrs.pop("body")
+            body_position = attrs.pop("bodyPosition", "0,0")
+            screens = []
+            for member in node.children or []:
+                if not isinstance(member, Element):
+                    continue
+                merged = dict(attrs)
+                merged.update(member.attrs)
+                body_include = Element("xmlinc", {"file": body, "position": body_position}, None, None)
+                screens.append(self.processElement(level, Element("screen", dict(sorted(merged.items())), [body_include], None)))
+            return screens
+
         if node.tag == "global":
             self.globals["$" + node.attrs["name"]] = self.resolveValue(node.attrs["value"])
             return None
@@ -774,6 +847,10 @@ class XMLInclude:
                 w, h = self.resolveValue(size_attr).split(",")
                 self.globals["$screen_width"] = w
                 self.globals["$screen_height"] = h
+            elif self.output_size:
+                # a screen without a size (position="fill") covers the whole output: without this it
+                # would keep the size of whichever earlier screen happened to declare one
+                self.globals["$screen_width"], self.globals["$screen_height"] = self.output_size
             self.current_screen = node.attrs.get("name", "?")
 
         if node.tag == "layout":
@@ -790,9 +867,17 @@ class XMLInclude:
             else:
                 self.layouts.append(node.attrs.get("name"))
 
+        if node.tag == "resolution" and "xres" in node.attrs and "yres" in node.attrs:
+            self.output_size = (self.resolveValue(node.attrs["xres"]), self.resolveValue(node.attrs["yres"]))
+
         new_attrs = {}
         for key, value in node.attrs.items():
-            value = self.resolveValue(value)
+            if node.tag == "screen" and key == "position" and self.output_size:
+                # a screen is placed on the output, so e/c-style formulas in its own position
+                # refer to the output size, not to the size of the screen being placed
+                value = self.resolveInOutputSize(value)
+            else:
+                value = self.resolveValue(value)
             self.checkColor(key, value)
             new_attrs[key] = value
         if "Summary" not in self.current_file:
@@ -813,10 +898,14 @@ class XMLInclude:
             self.checkFonts(new_attrs)
 
         new_children = None
+        placed_origin = None
         if node.children:
             new_children = []
+            own_children = []  # (start, end) in new_children of what is not a frame, or a screen placing one
             for child in node.children:
+                self.frame_origin = None
                 result = self.processElement(level, child)
+                child_origin = self.frame_origin
                 if result is None:
                     continue
                 if isinstance(child, Element) and child.tag == "xmlinc" and node.tag != "skin":
@@ -825,17 +914,34 @@ class XMLInclude:
                     # the included file is a whole <screen name="X"> definition,
                     # its content - not the <screen> wrapper - belongs here.
                     result = self.unwrapScreens(result)
+                start = len(new_children)
                 if isinstance(result, list):
                     new_children.extend(result)
                 else:
                     new_children.append(result)
+                if child_origin is None:
+                    own_children.append((start, len(new_children)))
+                elif placed_origin is None:
+                    placed_origin = child_origin
+            if placed_origin is not None and node.tag == "screen":
+                # the screen places a frame: everything else in it is relative to the frame's origin
+                for start, end in own_children:
+                    for item in new_children[start:end]:
+                        if isinstance(item, Element) and not item.screen_origin:
+                            self.offsetPositions(item, placed_origin)
+        self.frame_origin = placed_origin if node.tag == "screen" else None
 
         if node.tag == "applet":
             # python code: left exactly as written except for $variables the skin defines
             new_text = self.substituteKnownVars(node.text)
         else:
             new_text = self.resolveValue(self.normalizeText(node.text)) if node.text is not None else None
-        return Element(node.tag, new_attrs, new_children, new_text)
+        element = Element(node.tag, new_attrs, new_children, new_text)
+        # origin="screen" is for the compiler only: the element is not relative to the frame of its screen
+        if new_attrs.get("origin") == "screen":
+            del new_attrs["origin"]
+            element.screen_origin = True
+        return element
 
     def processFile(self, level, afile):
         print(f"==> processFile: >{level}, {afile}")

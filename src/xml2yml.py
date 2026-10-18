@@ -717,7 +717,7 @@ def toYmlIncFile(filename):
 def renderAttrs(tag, attrs, indent, lines):
     prefix = INDENT * indent
     for k, v in attrs.items():
-        if tag == "xmlinc" and k == "file":
+        if (tag == "xmlinc" and k == "file") or (tag == "screenfamily" and k == "body"):
             v = toYmlIncFile(v)
         lines.append(f'{prefix}{k}: {yamlScalar(stripEval(v))}')
 

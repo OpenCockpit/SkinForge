@@ -6,14 +6,14 @@ SkinForge is a skin design kit that encompasses
   - relative positioning of building blocks
   - global variables
 - an offline skin compiler that lets you write skins in a richer, hierarchical language and compiles them down to the plain, flat XML enigma2 actually loads
-- ZAML/YAML high level skin defintion language plus converters to translate it to/from XML
+- a 3-tier high level skin defintion language plus converters to translate it to/from XML
 
 ## Language levels
 
 0. **XML**: the flat XML enigma2 itself understands; nothing to compile.
 1. **XML+**: hierarchical XML with includes, variables, relative positioning and compile-time color/formula checking (`xmlcompile`).
 2. **YAML**: a readable YAML dialect (`skin.yml` / `*.ymlinc`) that round-trips to and from XML+ (`ymlcompile`).
-3. **ZAML** (Zenith Advanced Markup Language): YAML plus a `for` loop for repeated blocks (`zmlcompile`).
+3. **ZAML** (Zenith Advanced Markup Language): YAML plus a `for`-loop for repeated blocks (`zmlcompile`).
 
 ```mermaid
 flowchart TD
@@ -39,17 +39,5 @@ Then compile a plugin's skin, where `<domain>` is the plugin's directory name:
 ```
 zmlcompile <domain> [srcbase] [dstbase] [cmnbase]
 ```
-
-## Documentation
-
-The full documentation is in the [SkinForge wiki](https://github.com/OpenCockpit/SkinForge/wiki):
-
-- [Getting started](https://github.com/OpenCockpit/SkinForge/wiki/Getting-Started)
-- [ZAML & YAML skin example](https://github.com/OpenCockpit/SkinForge/wiki/Skin-Example)
-- [Authoring in YAML](https://github.com/OpenCockpit/SkinForge/wiki/Authoring-in-YAML)
-- [Authoring in ZAML](https://github.com/OpenCockpit/SkinForge/wiki/Authoring-in-ZAML)
-- [The XML+ compiler](https://github.com/OpenCockpit/SkinForge/wiki/XML-Plus-Compiler)
-- [Other tools](https://github.com/OpenCockpit/SkinForge/wiki/Other-Tools)
-
 ## Wiki
 - https://github.com/xcentaurix/SkinForge/wiki
