@@ -141,6 +141,12 @@ def expandOnce(text):
             body_lines.append(raw)
             j += 1
 
+        # blank lines after the last line of the body (before the next item, or the end of the file) are not part of
+        # it: they follow the last iteration once, instead of being repeated after every one
+        trailing_blank = []
+        while body_lines and body_lines[-1].strip() == "":
+            trailing_blank.append(body_lines.pop())
+
         if var_name is None or not body_lines or (var_range is None and not var_values):
             out.append(lines[i])
             i += 1
@@ -164,6 +170,7 @@ def expandOnce(text):
                     continue
                 dedented = bl[shift:] if 0 < shift <= len(bl) else bl
                 out.append(var_re.sub(lambda _m, v=value: v, dedented))
+        out.extend(trailing_blank)
 
         i = j
 
