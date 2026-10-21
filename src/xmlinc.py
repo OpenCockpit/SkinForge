@@ -7,6 +7,7 @@ import atexit
 import math
 import os
 import re
+import struct
 import shutil
 import sys
 import tempfile
@@ -104,6 +105,40 @@ LAYOUT_POSITIONS = {"fill", "top", "bottom", "left", "right"}
 # families keep the old conservative 4/3.
 FONT_LINE_HEIGHT = {"Regular": 1.036, "Bold": 0.832, "CAID": 1.104, "Fixed": 1.125, "Console": 1.201}
 FONT_LINE_HEIGHT_DEFAULT = 4.0 / 3.0
+
+# The check below prefers what the skin declares: a font family (<font name=... filename=... scale=.../> in
+# fonts.xmlinc) is rendered at size*scale/100 and its line is (ascender - descender + line gap) / unitsPerEm
+# of the font file high. That is read from the font file if it can be found (in the skin directories, in
+# $SKINFORGE_FONTS, in enigma2's data/fonts next to SkinForge or in /usr/share/fonts); if not, from this table
+# of the same numbers (per em), and for an unknown file the conservative default above.
+FONT_FILE_LINE_HEIGHT = {
+    "DejaVuSans.ttf": 1.1641, "Roboto-Bold.ttf": 1.1719, "OpenSans-Regular.ttf": 1.3618, "OpenSans-Semibold.ttf": 1.3618,
+    "OpenSans-Italic.ttf": 1.3618, "DroidSans-Bold.ttf": 1.1699, "andale.ttf": 1.125, "Bignoodletitling.ttf": 1.104,
+}
+_font_metrics_cache = {}
+
+
+def readFontLineHeight(path):
+    """Line height per em of a TrueType/OpenType font file (hhea table), or None if it can't be read."""
+    if path in _font_metrics_cache:
+        return _font_metrics_cache[path]
+    result = None
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+        count = struct.unpack(">H", data[4:6])[0]
+        tables = {}
+        for i in range(count):
+            tag, _checksum, offset, _length = struct.unpack(">4sIII", data[12 + 16 * i:28 + 16 * i])
+            tables[tag] = offset
+        units = struct.unpack(">H", data[tables[b"head"] + 18:tables[b"head"] + 20])[0]
+        ascender, descender, gap = struct.unpack(">hhh", data[tables[b"hhea"] + 4:tables[b"hhea"] + 10])
+        if units:
+            result = (ascender - descender + gap) / units
+    except Exception:
+        result = None
+    _font_metrics_cache[path] = result
+    return result
 
 
 class Pos():
@@ -374,6 +409,7 @@ class XMLInclude:
         self.layouts = []
         self.colors = {}
         self.font_aliases = {}   # <alias name=... font=... size=.../> declarations: name -> (face, size)
+        self.font_defs = {}      # <font name=... filename=... scale=.../> declarations: name -> (filename, scale in %)
         self.defaults = {}
         self.current_screen = "?"
         self.current_file = ""
@@ -515,20 +551,55 @@ class XMLInclude:
                     j += 1
                 formula = text[start:j]
                 formula = re.sub(r'(?<!/)/(?!/)', '//', formula)
-                eval_result = eval(formula)  # pylint: disable=eval-used
-                if isinstance(eval_result, float):
-                    if eval_result >= 0:
-                        result = int(math.floor(eval_result + 0.5))
+                try:
+                    eval_result = eval(formula)  # pylint: disable=eval-used
+                    if isinstance(eval_result, float):
+                        if eval_result >= 0:
+                            result = int(math.floor(eval_result + 0.5))
+                        else:
+                            result = int(math.ceil(eval_result - 0.5))
                     else:
-                        result = int(math.ceil(eval_result - 0.5))
-                else:
-                    result = int(eval_result)
-                out.append(str(result))
+                        result = int(eval_result)
+                    out.append(str(result))
+                except Exception as e:
+                    # most likely a $var that is not defined (reported before): say so and go on with the
+                    # formula as it is, like an undefined $var itself, instead of ending the whole run
+                    print(f"ERROR: cannot evaluate {formula} in {self.current_file or '?'}: {type(e).__name__}")
+                    out.append(formula)
                 i = j
             else:
                 out.append(text[i])
                 i += 1
         return "".join(out)
+
+    def findFontFile(self, filename):
+        """The path of a declared font file in the places a font is kept, or None."""
+        dirs = [d for d in os.environ.get("SKINFORGE_FONTS", "").split(os.pathsep) if d]
+        for base in (self.srcdir, self.dstdir, self.cmndir):
+            for d in (base, os.path.dirname(base)):
+                dirs += [d, os.path.join(d, "fonts")]
+        dirs += [os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "enigma2", "data", "fonts"),
+                 "/usr/share/fonts"]
+        for d in dirs:
+            path = os.path.join(d, filename)
+            if os.path.isfile(path):
+                return path
+        return None
+
+    def fontLineHeight(self, family):
+        """The height a line of the font family needs per unit of font size: the scale of the family (fonts.xmlinc)
+        times the line height of its font file per em. None if the family is not declared."""
+        declared = self.font_defs.get(family)
+        if not declared:
+            return None
+        filename, scale = declared
+        per_em = None
+        path = self.findFontFile(filename)
+        if path:
+            per_em = readFontLineHeight(path)
+        if per_em is None:
+            per_em = FONT_FILE_LINE_HEIGHT.get(os.path.basename(filename), FONT_LINE_HEIGHT_DEFAULT)
+        return per_em * scale / 100.0
 
     def checkFonts(self, attrs):
         if "font" not in attrs or "size" not in attrs:
@@ -547,7 +618,8 @@ class XMLInclude:
             size_height = attrs["size"].split(",")[1]
             if float(size_height) == 0:
                 return  # 0 = sized at runtime by the screen's code (or a hidden placeholder)
-            factor = FONT_LINE_HEIGHT.get(font_parts[0].strip(), FONT_LINE_HEIGHT_DEFAULT)
+            family = font_parts[0].strip()
+            factor = self.fontLineHeight(family) or FONT_LINE_HEIGHT.get(family, FONT_LINE_HEIGHT_DEFAULT)
             required = math.ceil(float(font_size) * factor)
             if float(size_height) < required:
                 widget = attrs.get("name") or attrs.get("source") or "?"
@@ -579,6 +651,12 @@ class XMLInclude:
                 self.colors["$" + n.attrs["name"]] = n.attrs["value"]
             if n.tag == "alias" and "name" in n.attrs and "font" in n.attrs and "size" in n.attrs:
                 self.font_aliases[n.attrs["name"]] = (n.attrs["font"], n.attrs["size"])
+            if n.tag == "font" and "name" in n.attrs and "filename" in n.attrs:
+                try:
+                    scale = float(self.resolveValue(n.attrs.get("scale", "100")))
+                except ValueError:
+                    scale = 100.0
+                self.font_defs[n.attrs["name"]] = (n.attrs["filename"], scale)
             if n.children:
                 self.scanColors(n.children)
 
