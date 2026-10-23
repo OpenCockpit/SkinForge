@@ -406,6 +406,7 @@ class XMLInclude:
         self.dstdir = dstdir
         self.cmndir = cmndir
         self.globals = {}
+        self.locals = []         # one {"$name": value} per file being processed (innermost last), see <local>
         self.layouts = []
         self.colors = {}
         self.font_aliases = {}   # <alias name=... font=... size=.../> declarations: name -> (face, size)
@@ -440,7 +441,15 @@ class XMLInclude:
         print(f"ERROR: inc file: {inc_file} not found.")
         return inc_file
 
+    def localVars(self):
+        """The <local> variables of the file being processed: nothing else sees them, not the files it includes
+        and not the file that included it."""
+        return self.locals[-1] if self.locals else {}
+
     def resolveVar(self, var):
+        local_vars = self.localVars()
+        if var in local_vars:
+            return local_vars[var]
         if var in self.colors:
             return self.colors[var]
         if var in self.globals:
@@ -462,8 +471,12 @@ class XMLInclude:
         if not text or "$" not in text:
             return text
 
+        local_vars = self.localVars()
+
         def sub(m):
             var = m.group(0)
+            if var in local_vars:
+                return local_vars[var]
             if var in self.colors:
                 return self.colors[var]
             if var in self.globals:
@@ -902,6 +915,13 @@ class XMLInclude:
             self.globals["$" + node.attrs["name"]] = self.resolveValue(node.attrs["value"])
             return None
 
+        if node.tag == "local":
+            # Like <global>, but only for the rest of this file: processFile() drops the file's variables when it is
+            # done, and an include of another file never sees them (hand a value on as an attribute of the <xmlinc>).
+            # Shadows a global of the same name.
+            self.localVars()["$" + node.attrs["name"]] = self.resolveValue(node.attrs["value"])
+            return None
+
         if node.tag == "default":
             # Already picked up by scanDefaults() before this file's
             # elements were processed - a <default> is build-time only,
@@ -1029,6 +1049,7 @@ class XMLInclude:
         # include here has been fully processed and control returns to it.
         prev_file = self.current_file
         self.current_file = afile
+        self.locals.append({})
         try:
             try:
                 doc = XmlParser(readFile(afile)).parseDocument()
@@ -1046,6 +1067,7 @@ class XMLInclude:
                     results.append(result)
             return results if len(results) != 1 else results[0]
         finally:
+            self.locals.pop()
             self.current_file = prev_file
 
 

@@ -71,8 +71,15 @@ TEMPLATE_KEYS = (
 RAW_KWARG_KEYS = {"call", "flags", "direction"}
 INDENT = "\t"
 BARE_VAR_RE = re.compile(r"^\$\w+$")
-FORMULA_OP_RE = re.compile(r"[+\-*/]")
+# "%" only counts between two operands, so a trailing/leading "%" (e.g. "50%") is not a formula
+FORMULA_OP_RE = re.compile(r"[+\-*/]|[\w)]\s*%\s*[\w($]|\b(?:min|max|abs|int|round)\(")
 IMAGE_FILE_RE = re.compile(r"\.(?:png|svg|jpg)$", re.IGNORECASE)
+# arithmetic on literals alone, e.g. "55+7%5*370": digits, parens and operators only, with at least one binary
+# operator (a plain "-100" is just a negative number)
+NUMERIC_FORMULA_RE = re.compile(r"^[\d\s().+\-*/%]+$")
+NUMERIC_BINARY_OP_RE = re.compile(r"[\d)]\s*[+\-*/%]\s*[\d(.]")
+# attributes whose segments are coordinates, where literal-only arithmetic can only mean a formula
+COORD_ATTRS = {"position", "size", "offset", "bodyPosition"}
 
 YAML_ESCAPES = {"\\": "\\", '"': '"', "n": "\n", "t": "\t", "r": "\r"}
 
@@ -324,14 +331,45 @@ def xmlEscapeAttr(value):
     return xmlEscapeText(value).replace('"', "&quot;")
 
 
-def wrapEval(value):
+def splitTopLevel(value):
+    """Split on the commas that are not inside parentheses, so a formula
+    like max($a,$b) stays in one piece."""
+    segments = []
+    depth = 0
+    start = 0
+    for i, ch in enumerate(value):
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        elif ch == "," and depth == 0:
+            segments.append(value[start:i])
+            start = i + 1
+    segments.append(value[start:])
+    return segments
+
+
+def isFormulaSegment(seg, attr):
+    stripped = seg.strip()
+    if not stripped or "eval(" in stripped or BARE_VAR_RE.match(stripped) or IMAGE_FILE_RE.search(stripped):
+        return False
+    if "$" in stripped:
+        return bool(FORMULA_OP_RE.search(stripped))
+    return (attr in COORD_ATTRS and NUMERIC_FORMULA_RE.match(stripped) is not None
+            and NUMERIC_BINARY_OP_RE.search(stripped) is not None)
+
+
+def wrapEval(value, attr=None):
     """Inverse of xml2yml.py's stripEval(): re-wrap a formula segment in
-    eval(...) for xmlinc to evaluate at compile time. Splits on "," since
-    every real eval() usage in this codebase wraps exactly one comma-segment
-    of a position/size pair (e.g. "0,eval($screen_height-48)"), never a
-    partial segment. A segment is wrapped only if it references a $var,
-    isn't just that bare reference, AND actually contains a formula
-    operator (+-*/) - a plain "$FR_big" (substitution, no eval needed),
+    eval(...) for xmlinc to evaluate at compile time. Splits on the commas
+    outside parentheses since every real eval() usage in this codebase wraps
+    exactly one comma-segment of a position/size pair (e.g.
+    "0,eval($screen_height-48)"), never a partial segment. A segment is
+    wrapped only if it references a $var, isn't just that bare reference,
+    AND actually contains a formula operator (+-*/, or a binary %) - or, in a
+    coordinate attribute (*attr* in COORD_ATTRS), if it is arithmetic on
+    literals alone (e.g. "55+7%5*370"). A segment that already holds an
+    eval( is left as written. A plain "$FR_big" (substitution, no eval needed),
     TemplatedMultiContentEx's "e"/"c" grid math (no $ at all, evaluated
     separately inside <convert> blocks), and a $var embedded in a literal
     with no arithmetic at all (e.g. name="picon$index", a plain per-cell
@@ -342,15 +380,12 @@ def wrapEval(value):
     A segment ending in an image extension is a file path (e.g.
     "IS_HD:$imagepath/icon_hd.png"), whose "/" is a directory separator,
     not division - never a formula."""
-    if not isinstance(value, str) or "$" not in value:
+    if not isinstance(value, str) or ("$" not in value and attr not in COORD_ATTRS):
         return value
-    segments = value.split(",")
-    wrapped = [
-        seg if BARE_VAR_RE.match(seg.strip()) or "$" not in seg or not FORMULA_OP_RE.search(seg) or IMAGE_FILE_RE.search(seg.strip())
-        else f"eval({seg})"
-        for seg in segments
-    ]
-    return ",".join(wrapped)
+    return ",".join(
+        f"eval({seg})" if isFormulaSegment(seg, attr) else seg
+        for seg in splitTopLevel(value)
+    )
 
 
 def toXmlIncFile(filename):
@@ -367,7 +402,7 @@ def toXmlIncFile(filename):
 
 def renderAttrs(tag, attrs):
     return "".join(
-        f' {k}="{xmlEscapeAttr(wrapEval(toXmlIncFile(v) if (tag == "xmlinc" and k == "file") or (tag == "screenfamily" and k == "body") else v))}"'
+        f' {k}="{xmlEscapeAttr(wrapEval(toXmlIncFile(v) if (tag == "xmlinc" and k == "file") or (tag == "screenfamily" and k == "body") else v, k))}"'
         for k, v in attrs.items()
     )
 

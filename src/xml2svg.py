@@ -358,7 +358,7 @@ def parseArgs(argv):
     return parser.parse_args(argv)
 
 
-SOURCE_TAGS = {"xmlinc", "global", "default", "layout"}
+SOURCE_TAGS = {"xmlinc", "global", "local", "default", "layout"}
 
 
 def containsSourceTags(nodes):
