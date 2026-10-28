@@ -20,6 +20,8 @@ from FileUtils import readFile, writeFile
 # run into the source tree) into a temporary directory that is removed when
 # this run ends.
 _generated_xmlinc = {}   # source .ymlinc path -> generated temp .xmlinc path
+markSources = False      # xml2svg sets it: the generated .xmlinc carry _src="file:line" attributes (see yml2xml.py)
+reportOnlyAttrs = None   # xml2svg sets it: an unknown $var is only an error in these attributes (None: in all of them)
 _generated_dir = None
 
 
@@ -55,7 +57,7 @@ def generateXmlinc(xmlinc_path):
     os.makedirs(out_dir)
     out = os.path.join(out_dir, os.path.basename(base) + ".xmlinc")
     print(f"==> generating {out} from {yml_path}")
-    writeFile(out, yml2xml(readFile(yml_path), False))
+    writeFile(out, yml2xml(readFile(yml_path), False, os.path.basename(yml_path) if markSources else None))
     process_file(out, out)
     _generated_xmlinc[key] = out
     return out
@@ -415,6 +417,9 @@ class XMLInclude:
         self.current_screen = "?"
         self.current_file = ""
         self.output_size = None  # (xres, yres) of the <resolution> declared by the skin, if any
+        # the output the skins are designed for, until a <resolution> says otherwise: a plugin skin has none of its
+        # own (it is merged into the skin of the box) but its windows are sized from it, see frames.ymlinc
+        self.globals["$output_width"], self.globals["$output_height"] = "1920", "1080"
         self.frame_origin = None  # Pos of the frame (see processInclude) placed by what was just processed
         self.last_font_var = None
 
@@ -446,7 +451,7 @@ class XMLInclude:
         and not the file that included it."""
         return self.locals[-1] if self.locals else {}
 
-    def resolveVar(self, var):
+    def resolveVar(self, var, attr=None):
         local_vars = self.localVars()
         if var in local_vars:
             return local_vars[var]
@@ -460,7 +465,8 @@ class XMLInclude:
         try:
             return str(int(var.strip("$")))
         except Exception:
-            print(f"ERROR: global {var} not found.")
+            if reportOnlyAttrs is None or attr in reportOnlyAttrs:
+                print(f"ERROR: global {var} not found.")
             return var
 
     def substituteKnownVars(self, text):
@@ -510,7 +516,7 @@ class XMLInclude:
         saved = (self.globals.get("$screen_width"), self.globals.get("$screen_height"))
         self.globals["$screen_width"], self.globals["$screen_height"] = self.output_size
         try:
-            return self.resolveValue(value)
+            return self.resolveValue(value, "position")
         finally:
             for var, val in zip(("$screen_width", "$screen_height"), saved):
                 if val is None:
@@ -528,7 +534,7 @@ class XMLInclude:
         centers = [str(int(self.globals["$screen_width"]) // 2), str(int(self.globals["$screen_height"]) // 2)]
         return ",".join(re.sub(r"\$screen_center\b", centers[i], seg) for i, seg in enumerate(segments))
 
-    def resolveValue(self, value):
+    def resolveValue(self, value, attr=None):
         """$var substitution, then eval(...) evaluation, in that order (a
         formula can reference a global by name) - applied to one attribute
         value or text-content string at a time, each fully self-contained
@@ -537,7 +543,7 @@ class XMLInclude:
         if "$screen_center" in value:
             value = self.substituteScreenCenter(value)
         if "$" in value:
-            value = VAR_RE.sub(lambda m: self.resolveVar(m.group(0)), value)
+            value = VAR_RE.sub(lambda m: self.resolveVar(m.group(0), attr), value)
         if "eval" in value:
             value = self.evaluateFormulas(value)
         return value
@@ -782,7 +788,7 @@ class XMLInclude:
         for key, value in attrs.items():
             if key in {"file", "position"}:
                 continue
-            value = self.resolveValue(value)
+            value = self.resolveValue(value, key)
             resolved_attrs[key] = value
             if key == "size":
                 w, h = value.split(",")
@@ -831,7 +837,7 @@ class XMLInclude:
         # behind, never this one's own size.
         pos2 = pos
         if "position" in attrs:
-            pos2 = pos + Pos(self.centerPosition(self.resolveValue(attrs["position"]), box))
+            pos2 = pos + Pos(self.centerPosition(self.resolveValue(attrs["position"], "position"), box))
 
         # the origin of the frame this include placed, for the screen around it
         if is_frame:
@@ -942,7 +948,7 @@ class XMLInclude:
             # would just hide that source error instead of surfacing it.
             size_attr = node.attrs.get("size") or node.attrs.get("resolution")
             if size_attr:
-                w, h = self.resolveValue(size_attr).split(",")
+                w, h = self.resolveValue(size_attr, "size").split(",")
                 self.globals["$screen_width"] = w
                 self.globals["$screen_height"] = h
             elif self.output_size:
@@ -967,6 +973,9 @@ class XMLInclude:
 
         if node.tag == "resolution" and "xres" in node.attrs and "yres" in node.attrs:
             self.output_size = (self.resolveValue(node.attrs["xres"]), self.resolveValue(node.attrs["yres"]))
+            # the size of the output is known to the skin from here on: a window that fills it (Window_Full) is
+            # sized from these, as no screen is being processed yet when the globals of the frames are defined
+            self.globals["$output_width"], self.globals["$output_height"] = self.output_size
 
         new_attrs = {}
         for key, value in node.attrs.items():
@@ -975,7 +984,7 @@ class XMLInclude:
                 # refer to the output size, not to the size of the screen being placed
                 value = self.resolveInOutputSize(value)
             else:
-                value = self.resolveValue(value)
+                value = self.resolveValue(value, key)
             self.checkColor(key, value)
             new_attrs[key] = value
         if "Summary" not in self.current_file:
@@ -990,7 +999,7 @@ class XMLInclude:
                 for key, value in defaults.items():
                     if key in new_attrs:
                         continue
-                    value = self.resolveValue(value)
+                    value = self.resolveValue(value, key)
                     self.checkColor(key, value)
                     new_attrs[key] = value
             self.checkFonts(new_attrs)

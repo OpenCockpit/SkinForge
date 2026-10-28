@@ -25,6 +25,7 @@ import sys
 import json
 import argparse
 import tempfile
+import xmlinc
 from FileUtils import readFile, writeFile
 from xmlinc import XmlParser, Element, Comment, XmlParseError, XMLInclude
 
@@ -39,9 +40,22 @@ PALETTE = [
     "#edc948", "#b07aa1", "#ff9da7", "#9c755f", "#bab0ac",
 ]
 
+# Labels: 12px monospace (a character is about 7.3px wide), one line is 14px high
+LABEL_CHAR_W = 7.3
+LABEL_LINE_H = 14
+LABEL_ASCENT = 11
+LABEL_MAX_ROWS = 12   # rows tried inside a box before giving up on it
+ELLIPSIS = chr(0x2026)
+
 HEADER_HEIGHT = 28
 SCREEN_GAP = 40
 PAGE_MARGIN = 20
+
+# The only attributes the drawing depends on: an unknown $var anywhere else (fonts, radii, colors, ...) is not reported
+REPORTED_ATTRS = {"position", "size"}
+
+# yml2xml.py --marks leaves an attribute of this name on every element: "file:line" of the YAML source it came from
+MARK_ATTR = "_src"
 
 
 def parseCoordinate(s, e, size=0):
@@ -137,6 +151,52 @@ def describeElement(node):
     return label
 
 
+def takeSourceMarks(nodes, marks):
+    """Removes the MARK_ATTR attribute from every element of the tree (it is for drawing only: the metadata
+    svg2xml.py writes the source back from must not carry it) and records it in *marks*, {id(element): (file,
+    line)}."""
+    for n in nodes if isinstance(nodes, list) else [nodes]:
+        if not isinstance(n, Element):
+            continue
+        mark = n.attrs.pop(MARK_ATTR, None)
+        if mark:
+            name, _, line = mark.rpartition(":")
+            if line.isdigit():
+                marks[id(n)] = (name, int(line))
+        if n.children:
+            takeSourceMarks(n.children, marks)
+
+
+def sourceFiles(screen, marks):
+    """The source files the first-level elements of a screen come from, in order of appearance - a file's position
+    in this list is its number in the id printed on the box (see sourceId())."""
+    files = []
+    for node in screen.children or []:
+        mark = marks.get(id(node)) if isinstance(node, Element) else None
+        if mark and mark[0] not in files:
+            files.append(mark[0])
+    return files
+
+
+def sourceId(node, marks, files):
+    """The id printed on a box: the line of the element in its YAML source - prefixed by the number of the source
+    file ("2:17") when the screen is made of more than one, the legend in the screen's header names them. None for
+    an element without a source mark (not from a YAML source)."""
+    mark = marks.get(id(node))
+    if not mark:
+        return None
+    name, line = mark
+    return f"{files.index(name) + 1}:{line}" if len(files) > 1 else str(line)
+
+
+def sourceLegend(files):
+    if not files:
+        return ""
+    if len(files) == 1:
+        return f"ids = line in {files[0]}"
+    return "ids = file:line - " + "  ".join(f"{i}={name}" for i, name in enumerate(files, 1))
+
+
 def escapeXml(text):
     return (text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
             .replace('"', "&quot;"))
@@ -159,8 +219,77 @@ def collectScreens(root):
             yield node, w, h
 
 
-def renderScreenBoxes(screen, screen_w, screen_h, globalColors, screen_idx):
-    """Returns the list of SVG element strings (rects+labels) for one
+def labelOverlaps(rect, placed):
+    x0, y0, x1, y1 = rect
+    return any(x0 < px1 and px0 < x1 and y0 < py1 and py0 < y1 for px0, py0, px1, py1 in placed)
+
+
+def labelRect(tx, ty, tw):
+    return tx - 2, ty - LABEL_ASCENT, tx + tw + 2, ty - LABEL_ASCENT + LABEL_LINE_H + 1
+
+
+def insideCandidates(x, y, w, h, tw):
+    """Baseline positions for a label of width tw inside the box (x, y, w, h): row by row from the top, left
+    aligned before right aligned."""
+    if tw + 8 > w:
+        return
+    ty = y + LABEL_LINE_H
+    for _row in range(LABEL_MAX_ROWS):
+        if ty + 3 > y + h:
+            break
+        yield x + 4, ty
+        yield x + w - 4 - tw, ty
+        ty += LABEL_LINE_H
+
+
+def outsideCandidates(x, y, w, h, tw):
+    """Next to the box: above, below, then right and left of it, each starting at the box edge."""
+    yield x, y - 4
+    yield x + w - tw, y - 4
+    yield x, y + h + LABEL_LINE_H - 2
+    yield x + w - tw, y + h + LABEL_LINE_H - 2
+    yield x + w + 4, y + LABEL_LINE_H
+    yield x - 4 - tw, y + LABEL_LINE_H
+
+
+def labelVariants(src_id, name, box_w):
+    """The texts a label may take, longest first: (id, name) with the name cut to the width of the box, then
+    just the id. Each as (id, name, inside_only)."""
+    idtext = f"#{src_id}" if src_id else ""
+    variants = [(idtext, name, False)]
+    room = int((box_w - 8) / LABEL_CHAR_W) - (len(idtext) + 1 if idtext else 0)
+    if 0 < room < len(name):
+        variants.append((idtext, name[:max(room - 1, 1)] + ELLIPSIS if room > 2 else "", True))
+    if idtext:
+        variants.append((idtext, "", False))
+    return variants
+
+
+def placeLabel(box, src_id, name, placed, screen_w, screen_h):
+    """Finds the place of the label of one box where it overlaps no label placed before: inside the box (the whole
+    text, then cut to the box, then just the id), then outside it (whole text, then just the id). Falls back to the
+    box's top left corner when the neighbourhood is full. Returns (tx, ty, id, name)."""
+    x, y, w, h = box
+    variants = labelVariants(src_id, name, w)
+    plans = [(v, insideCandidates) for v in variants] + [(v, outsideCandidates) for v in (variants[0], variants[-1])]
+    for (idtext, text, _inside_only), candidates in plans:
+        tw = LABEL_CHAR_W * len((idtext + " " + text).strip())
+        for tx, ty in candidates(x, y, w, h, tw):
+            tx = max(0, min(tx, screen_w - tw))
+            if ty - LABEL_ASCENT < 0 or ty > screen_h:
+                continue
+            rect = labelRect(tx, ty, tw)
+            if not labelOverlaps(rect, placed):
+                placed.append(rect)
+                return tx, ty, idtext, text
+    idtext, text, _ = variants[0]
+    tw = LABEL_CHAR_W * len((idtext + " " + text).strip())
+    placed.append(labelRect(x + 4, y + LABEL_LINE_H, tw))
+    return x + 4, y + LABEL_LINE_H, idtext, text
+
+
+def renderScreenBoxes(screen, screen_w, screen_h, globalColors, screen_idx, marks):
+    """Returns the list of SVG element strings (the boxes, then one layer with their labels) for one
     screen's first-level children, in screen-local coordinates (the caller
     wraps this in a <g transform="translate(...)"> for placement) - and
     draws in zPosition order (default 0, so an unset zPosition sorts with
@@ -171,7 +300,15 @@ def renderScreenBoxes(screen, screen_w, screen_h, globalColors, screen_idx):
     this element's index in screen.children (the *unfiltered* list, so a
     skipped tag like <colors> still "uses up" an index, keeping numbering
     stable) - so svg2xml.py can match a possibly-edited box back to the
-    exact element it came from, via the <metadata> tree it also embeds."""
+    exact element it came from, via the <metadata> tree it also embeds.
+
+    An element that came from a YAML source also shows the line it starts on there (see sourceId()) in front of
+    its label, and has it in its tooltip and as data-src.
+
+    The labels are not part of the boxes: they are all drawn after the last box (a box drawn later would
+    otherwise tint the label of an earlier one), with a white halo, and each at a place where it overlaps no other
+    label (see placeLabel()) - the small boxes choose first, a big one can go on a lower line or next to its box.
+    The layer does not take mouse events, so the tooltip of a box stays reachable."""
     colorsNode = next((c for c in (screen.children or []) if isinstance(c, Element) and c.tag == "colors"), None)
     colormap = buildColorMap(colorsNode, globalColors)
 
@@ -186,23 +323,37 @@ def renderScreenBoxes(screen, screen_w, screen_h, globalColors, screen_idx):
         boxes.append((z, child_idx, node))
     boxes.sort(key=lambda t: (t[0], t[1]))
 
+    files = sourceFiles(screen, marks)
     out = []
-    for _z, child_idx, node in boxes:
+    geometry = []   # (draw order, box, id, label) per box
+    for order, (_z, child_idx, node) in enumerate(boxes):
         x, y, w, h = resolveBox(node.attrs, screen_w, screen_h)
         fill = resolveColor(node.attrs.get("backgroundColor"), colormap) or PALETTE[child_idx % len(PALETTE)]
-        label = describeElement(node)
         full = " ".join(f'{k}="{v}"' for k, v in node.attrs.items())
+        mark = marks.get(id(node))
+        src_attr = f' data-src="{escapeXml(f"{mark[0]}:{mark[1]}")}"' if mark else ""
+        src_title = f"{mark[0]}:{mark[1]}\n" if mark else ""
         out.append(
-            f'<g>'
-            f'<rect data-ref="{screen_idx}:{child_idx}" x="{x}" y="{y}" width="{w}" height="{h}" '
+            f'<rect data-ref="{screen_idx}:{child_idx}"{src_attr} x="{x}" y="{y}" width="{w}" height="{h}" '
             f'fill="{fill}" fill-opacity="0.45" stroke="#000000" stroke-opacity="0.6" stroke-width="1">'
-            f'<title>{escapeXml(f"<{node.tag}> {full}")}</title>'
+            f'<title>{escapeXml(f"{src_title}<{node.tag}> {full}")}</title>'
             f'</rect>'
-            f'<text x="{x + 4}" y="{y + 14}" font-family="monospace" font-size="12" fill="#000000">'
-            f'{escapeXml(label)}'
-            f'</text>'
-            f'</g>'
         )
+        geometry.append((order, (x, y, max(w, 1), max(h, 1)), sourceId(node, marks, files), describeElement(node)))
+
+    placed = []
+    texts = {}
+    for order, box, src_id, name in sorted(geometry, key=lambda g: (g[1][2] * g[1][3], g[0])):
+        texts[order] = placeLabel(box, src_id, name, placed, screen_w, screen_h)
+
+    out.append('<g pointer-events="none" font-family="monospace" font-size="12" fill="#000000" stroke="#ffffff" '
+               'stroke-width="3" stroke-opacity="0.85" stroke-linejoin="round" paint-order="stroke">')
+    for order in range(len(geometry)):
+        tx, ty, idtext, text = texts[order]
+        runs = (f'<tspan font-weight="bold">{escapeXml(idtext)}</tspan>' if idtext else "")
+        runs += (" " if idtext and text else "") + escapeXml(text)
+        out.append(f'<text x="{round(tx)}" y="{ty}">{runs}</text>')
+    out.append('</g>')
     return out
 
 
@@ -289,7 +440,8 @@ def wrapFragmentAsScreen(nodes, name, explicitSize):
     return Element("screen", {"name": name, "size": f"{w},{h}"}, nodes, None)
 
 
-def renderSvg(root, extraColors=None, fragment=False):
+def renderSvg(root, extraColors=None, fragment=False, marks=None):
+    marks = marks or {}
     screens = list(collectScreens(root))
     if not screens:
         print("WARNING: no <screen> elements found - nothing to draw")
@@ -320,14 +472,16 @@ def renderSvg(root, extraColors=None, fragment=False):
     y = PAGE_MARGIN
     for screen_idx, (screen, w, h) in enumerate(screens):
         name = screen.attrs.get("name", "?")
+        legend = sourceLegend(sourceFiles(screen, marks))
+        legend_text = f' <tspan font-family="monospace" font-size="12" font-weight="normal" fill="#555555">{escapeXml(legend)}</tspan>' if legend else ""
         parts.append(
             f'<text x="{PAGE_MARGIN}" y="{y + 18}" font-family="sans-serif" font-size="16" '
-            f'font-weight="bold" fill="#111111">{escapeXml(name)} ({w}x{h})</text>'
+            f'font-weight="bold" fill="#111111">{escapeXml(name)} ({w}x{h}){legend_text}</text>'
         )
         content_y = y + HEADER_HEIGHT
         parts.append(f'<g data-screen="{screen_idx}" transform="translate({PAGE_MARGIN},{content_y})">')
         parts.append(f'<rect x="0" y="0" width="{w}" height="{h}" fill="#ffffff" stroke="#999999" stroke-width="1"/>')
-        parts.extend(renderScreenBoxes(screen, w, h, globalColors, screen_idx))
+        parts.extend(renderScreenBoxes(screen, w, h, globalColors, screen_idx, marks))
         parts.append('</g>')
         y = content_y + h + SCREEN_GAP
 
@@ -342,8 +496,10 @@ def parseArgs(argv):
                              "fragment (e.g. Common/src/skin/screenpart_*.xmlinc) with no <screen> wrapper")
     parser.add_argument("-o", dest="dst", required=True, help="output .svg file")
     parser.add_argument("--size", dest="size", help="WxH (e.g. 615x740) to use as the canvas for a bare "
-                                                    "fragment - defaults to the computed bounding box of its own elements")
+                        "fragment - defaults to the computed bounding box of its own elements")
     parser.add_argument("-c", dest="common", help="common dir for <xmlinc> resolution (source input only) - defaults to the input's own dir")
+    parser.add_argument("--srcdir", dest="srcdir", help="dir the input's <xmlinc> includes are looked up in first (source input only) - defaults to "
+                        "the input's own dir; for an input that is a converted copy of a source in another dir")
     parser.add_argument("--include", dest="includes", action="append", default=[],
                         help="source file(s) to process first, so their <global>/<color> defs (e.g. fonts.xmlinc, "
                              "colors.xmlinc) are known while resolving the input - repeatable")
@@ -372,15 +528,20 @@ def containsSourceTags(nodes):
     return False
 
 
-def compileSource(src, common, includes, size):
+def compileSource(src, common, includes, size, srcdir=None):
     """Runs a source file (skin.xml / *.xmlinc, uncompiled) through xmlinc.py's
     own resolver and returns (parsed result, {color name: value}) - the same
     result a real build would splice in. size ("WxH") seeds $width/$height
     and $screen_width/$screen_height, which a bare screenpart inherits from
     whatever includes it on a real build."""
-    srcdir = os.path.dirname(src)
+    srcdir = os.path.normpath(srcdir) if srcdir else os.path.dirname(src)
     with tempfile.TemporaryDirectory() as tmp:
         inc = XMLInclude(srcdir, tmp, os.path.normpath(common) if common else srcdir)
+        # the output of a skin is declared by its output.xmlinc (a <resolution>), which a single screen does not
+        # include: what fills it (Window_Full, in frames.xmlinc) is sized from $output_width/$output_height, so the
+        # canvas stands for the output
+        out_w, out_h = (size or "1920x1080").lower().split("x")
+        inc.globals.update({"$output_width": out_w, "$output_height": out_h})
         for inc_file in includes:
             inc_file = os.path.normpath(inc_file)
             doc = loadDocument(inc_file)
@@ -427,16 +588,21 @@ def xml2svg(argv):
     dst = os.path.normpath(args.dst)
 
     print(f"reading: {src}")
+    xmlinc.markSources = True   # a .ymlinc include is converted with its line numbers, see takeSourceMarks()
+    xmlinc.reportOnlyAttrs = REPORTED_ATTRS
     parsed = loadDocument(src)
 
     extraColors = {}
     if args.compile or src.lower().endswith(".xmlinc") or containsSourceTags(parsed):
         print("source input (<xmlinc>/$var/eval) - resolving with xmlinc first")
-        parsed, extraColors = compileSource(src, args.common, args.includes, args.size)
+        parsed, extraColors = compileSource(src, args.common, args.includes, args.size, args.srcdir)
     if args.plugin:
         replacePlaceholder(parsed, "%PLUGIN%", args.plugin)
     for colorFile in args.colors:
         scanColorsRecursive([parsed_doc] if isinstance(parsed_doc := loadDocument(colorFile), Element) else parsed_doc, extraColors)
+
+    marks = {}
+    takeSourceMarks(parsed, marks)
 
     fragment = not (isinstance(parsed, Element) and parsed.tag == "skin")
     if not fragment:
@@ -451,7 +617,7 @@ def xml2svg(argv):
         screenNode = wrapFragmentAsScreen(nodes, name, args.size)
         root = Element("skin", {}, [screenNode], None)
 
-    svg = renderSvg(root, extraColors, fragment)
+    svg = renderSvg(root, extraColors, fragment, marks)
     if svg is None:
         return
     writeFile(dst, svg)

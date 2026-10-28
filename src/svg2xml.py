@@ -233,7 +233,8 @@ def svg2xml(argv):
     screens = [dictToNode(s) for s in metadata["screens"]]
     total_changed = 0
     for screen_idx, screenTree in enumerate(screens):
-        w, h = (int(v) for v in screenTree.attrs["size"].split(","))
+        size_attr = screenTree.attrs.get("size") or screenTree.attrs.get("resolution", "1920,1080")   # as xml2svg.py draws it
+        w, h = (int(v) for v in size_attr.split(","))
         total_changed += applyEdits(screenTree, w, h, rects, screen_idx)
     print(f"{total_changed} element(s) repositioned/resized")
 

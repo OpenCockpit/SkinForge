@@ -1,9 +1,11 @@
 #!/bin/bash
 # xml2svg <domain>
 # xml2svg <compiled skin.xml | source .xmlinc> [dst .svg file] [--size WxH] [--include file ...] [-c commondir]
-# A source file with no dst writes <file>.svg next to it; for a .xmlinc, fonts.xmlinc
-# and colors.xmlinc from the same dir are included automatically if present.
+# A source file with no dst writes <file>.svg next to it; for a .xmlinc, fonts.xmlinc, colors.xmlinc, ... of the
+# shared Common/src/skin (next to this tool's directory) and then of the same dir are included automatically if present.
+# Without -c, includes are also looked up in Common/src/skin/<skin>, then Common/src/skin, like the build does.
 extra=()
+commondir="$(cd "$(dirname "$0")/../Common/src/skin" 2>/dev/null && pwd)"   # the shared building blocks
 if [ -f "$1" ]; then
 	src="$1"
 	shift
@@ -14,12 +16,20 @@ if [ -f "$1" ]; then
 		dst="${src%.*}.svg"
 	fi
 	if [[ "$src" == *.xmlinc ]]; then
-		srcdir="$(dirname "$src")"
-		# the definitions (fonts, colors, radii, ...) every screen of the directory may use, not the file itself
-		for inc in fonts.xmlinc colors.xmlinc radii.xmlinc frames.xmlinc screenpart_globals.xmlinc globals.xmlinc display_globals.xmlinc; do
-			[ "$inc" != "$(basename "$src")" ] && [ -f "$srcdir/$inc" ] && extra+=(--include "$srcdir/$inc")
+		srcdir="$(cd "$(dirname "$src")" && pwd)"
+		# the definitions (fonts, colors, radii, ...) every screen may use, the shared ones first so that those
+		# of the directory win, not the file itself
+		incdirs=()
+		[ -n "$commondir" ] && [ "$commondir" != "$srcdir" ] && incdirs+=("$commondir")
+		incdirs+=("$srcdir")
+		for incdir in "${incdirs[@]}"; do
+			for inc in fonts.xmlinc colors.xmlinc radii.xmlinc frames.xmlinc screenpart_globals.xmlinc globals.xmlinc display_globals.xmlinc; do
+				[ "$inc" != "$(basename "$src")" ] && [ -f "$incdir/$inc" ] && extra+=(--include "$incdir/$inc")
+			done
 		done
-		extra+=(-c "$srcdir")
+	fi
+	if [[ "$src" == *.xmlinc || "$src" == *.xml ]] && [ -n "$commondir" ]; then
+		extra+=(-c "$commondir/$(basename "$(cd "$(dirname "$src")" && pwd)")")   # a later -c of the caller wins
 	fi
 elif [ -z "$2" ]; then
 	domain=$(getdomain $1)

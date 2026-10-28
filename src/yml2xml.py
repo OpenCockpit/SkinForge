@@ -115,14 +115,23 @@ class HexInt(int):
 # "text" key of any other element is its text attribute.
 TEXT_BODY_TAGS = {"applet", "convert"}
 
+# --marks: every element gets an _src="file:line" attribute that points back to the line of the YAML source it came
+# from (xml2svg prints it on the box it draws, so a box can be found in the source). Not for the tags that are for the
+# compiler only or have a text body of their own: they are not drawn, and an _src would be taken for a variable on an
+# <xmlinc>.
+MARK_ATTR = "_src"
+NO_MARK_TAGS = {"xmlinc", "global", "local", "default", "screenfamily", "layout", "applet", "convert"}
+
 
 class Commented:
     """Wraps a parsed sequence item together with a standalone comment line
-    that preceded it in the source, if any."""
+    that preceded it in the source, if any, and the (1-based) line the item
+    starts on."""
 
-    def __init__(self, value, comment=None):
+    def __init__(self, value, comment=None, line=None):
         self.value = value
         self.comment = comment
+        self.line = line
 
 
 # ---------------------------------------------------------------------------
@@ -135,9 +144,10 @@ class YamlParser():
         # from there on, exactly as written (a tab and a "#" stay), which is what a "|" block scalar needs - the
         # Python of an <applet> indents with tabs and has comment lines of its own; tabbed says that tabs are part
         # of the leading whitespace, which is only legal inside such a block scalar (see parseDocument)
+        # and line is the 1-based line number in the source, which the --marks output points back to
         self.entries = []
         blank = []   # the whitespace-only lines since the last entry: only a block scalar keeps them
-        for raw in text.split("\n"):
+        for lineno, raw in enumerate(text.split("\n"), 1):
             raw = raw.rstrip("\r")
             stripped = raw.rstrip()
             if not stripped.strip():
@@ -147,15 +157,17 @@ class YamlParser():
             indent = len(stripped) - len(stripped.lstrip(" "))
             content = stripped.strip()
             is_comment = content.startswith("#")
-            self.entries.append((indent, content[1:].strip() if is_comment else content, is_comment, raw[indent:], tabbed, blank))
+            self.entries.append((indent, content[1:].strip() if is_comment else content, is_comment, raw[indent:], tabbed, blank, lineno))
             blank = []
         self.pos = 0
+        self.root_line = None
         self.scalar_entries = set()   # the entries that are the content of a block scalar
 
     def peek(self):
         return self.entries[self.pos] if self.pos < len(self.entries) else None
 
     def parseDocument(self):
+        self.root_line = next((e[6] for e in self.entries if not e[2]), None)   # where the root element starts
         document = self.parseBlock(0)
         for i, entry in enumerate(self.entries):
             if entry[4] and i not in self.scalar_entries:
@@ -189,7 +201,7 @@ class YamlParser():
                 break
             self.pos += 1
             value = self.parseSequenceItem(content[2:], indent + 2)
-            result.append(Commented(value, pending_comment))
+            result.append(Commented(value, pending_comment, e[6]))
             pending_comment = None
         return result
 
@@ -735,7 +747,7 @@ def fromDomainCell(cell):
     return body
 
 
-def renderNode(tag, body, level, lines):
+def renderNode(tag, body, level, lines, mark=None, line=None):
     body = body or {}
     prefix = INDENT * level
 
@@ -743,8 +755,8 @@ def renderNode(tag, body, level, lines):
         attr_str = renderAttrs(tag, {"type": body.get("type", "")})
         lines.append(f"{prefix}<convert{attr_str}>")
         template_body = fromDomainCell(body["cell"]) if "cell" in body else body
-        for line in renderConvertTemplate(template_body).split("\n"):
-            lines.append(f"{prefix}{line}" if line else "")
+        for _line in renderConvertTemplate(template_body).split("\n"):
+            lines.append(f"{prefix}{_line}" if _line else "")
         lines.append(f"{prefix}</convert>")
         return
 
@@ -762,6 +774,8 @@ def renderNode(tag, body, level, lines):
         text = body.get("text")
         attrs = {k: v for k, v in body.items() if k not in ("children", "text")}
     attr_str = renderAttrs(tag, attrs)
+    if mark and line and tag not in NO_MARK_TAGS:
+        attr_str += f' {MARK_ATTR}="{xmlEscapeAttr(f"{mark}:{line}")}"'
 
     if children:
         lines.append(f"{prefix}<{tag}{attr_str}>")
@@ -769,7 +783,7 @@ def renderNode(tag, body, level, lines):
             if isinstance(item, Commented) and item.comment:
                 lines.append(f"{prefix}{INDENT}<!-- {item.comment} -->")
             (child_tag, child_body), = unwrap(item).items()
-            renderNode(child_tag, child_body, level + 1, lines)
+            renderNode(child_tag, child_body, level + 1, lines, mark, item.line if isinstance(item, Commented) else None)
         lines.append(f"{prefix}</{tag}>")
     elif tag == "convert" and text is not None and "\n" in text:
         # A convert type parseConvertTemplate() didn't recognize (e.g. this
@@ -780,8 +794,8 @@ def renderNode(tag, body, level, lines):
         # branch above gets, not glued onto <convert>/</convert> like a
         # single-line convert's (ClockToText, ServiceTime, ...) text is.
         lines.append(f"{prefix}<{tag}{attr_str}>")
-        for line in xmlEscapeText(text).split("\n"):
-            lines.append(line)   # as written: the indentation is part of the body (see xml2yml's verbatimBody)
+        for _line in xmlEscapeText(text).split("\n"):
+            lines.append(_line)   # as written: the indentation is part of the body (see xml2yml's verbatimBody)
         lines.append(f"{prefix}</{tag}>")
     elif text is not None:
         lines.append(f"{prefix}<{tag}{attr_str}>{xmlEscapeText(text)}</{tag}>")
@@ -789,8 +803,11 @@ def renderNode(tag, body, level, lines):
         lines.append(f"{prefix}<{tag}{attr_str}/>")
 
 
-def yml2xml(text, is_full_document):
-    root = YamlParser(text).parseDocument()
+def yml2xml(text, is_full_document, mark=None):
+    """mark: the name of the source file, to have every element carry an _src="name:line" attribute (see
+    MARK_ATTR); None for the plain conversion."""
+    parser = YamlParser(text)
+    root = parser.parseDocument()
     lines = []
     if is_full_document:
         # Matches xmlpretty.py's minidom.toprettyxml() output exactly (no
@@ -806,12 +823,12 @@ def yml2xml(text, is_full_document):
             if isinstance(item, Commented) and item.comment:
                 lines.append(f"<!-- {item.comment} -->")
             (tag, body), = unwrap(item).items()
-            renderNode(tag, body, 0, lines)
+            renderNode(tag, body, 0, lines, mark, item.line if isinstance(item, Commented) else None)
     else:
         root_items = list(root.items())
         assert len(root_items) == 1, "document root must have exactly one top-level key"
         tag, body = root_items[0]
-        renderNode(tag, body, 0, lines)
+        renderNode(tag, body, 0, lines, mark, parser.root_line)
     return "\n".join(lines) + "\n"
 
 
@@ -828,6 +845,9 @@ def parseArgs(argv):
     parser.add_argument("-i", dest="srcinfile", required=True, help="source .yml/.ymlinc file")
     parser.add_argument("-o", dest="srcoutfile", default=None,
                         help="destination .xml/.xmlinc file (default: input filename with opposite extension)")
+    parser.add_argument("--marks", dest="marks", action="store_true",
+                        help="give every element an _src=\"file:line\" attribute pointing back to its line in the "
+                             "source (for xml2svg, which prints it on the box; not for a skin.xml that is shipped)")
     return parser.parse_args(argv)
 
 
@@ -846,7 +866,7 @@ def main(argv):
         sys.exit(1)
 
     is_full_document = args.srcinfile.endswith(".yml")
-    output = yml2xml(readFile(args.srcinfile), is_full_document)
+    output = yml2xml(readFile(args.srcinfile), is_full_document, os.path.basename(args.srcinfile) if args.marks else None)
     writeFile(srcoutfile, output)
 
     # print("yml2xml done.")
