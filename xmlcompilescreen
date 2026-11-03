@@ -1,0 +1,83 @@
+#!/bin/bash
+# Compiles one screen_*.ymlinc (or .xmlinc) and puts the result into the skin.xml of the last full build, in place of
+# the screen of the same name: for debugging a screen without compiling all the others.
+#
+#   xmlcompilescreen <domain> <screen_file> [srcbase] [dstbase] [cmnbase]
+#
+# <screen_file> is the name of the screen_* file, with or without extension and path. The skin of the plugin is
+# compiled as xmlcompile does it, except that the other screen_* files it includes are skipped, and only the
+# screen(s) of the file are written to $dstbase/<domain>/src/skin/<skin>/skin.xml. The rest of that skin.xml is not
+# touched: it needs a full compile (ymlcompile) first, and again when something else than the screen changed
+# (the globals, a part another screen uses, ...).
+. "$(dirname "$0")/common"
+
+domain=$("$(dirname "$0")/getdomain" "$1")
+if [ -z "$domain" ]; then
+	echo no valid domain specified
+	exit 1
+fi
+echo "Domain: $domain"
+
+screen=$(basename "$2")
+screen="${screen%.*}"
+if [[ $screen != screen_* ]]; then
+	echo "Usage: $0 <domain> <screen_file> [srcbase] [dstbase] [cmnbase]"
+	exit 1
+fi
+echo "Screen: $screen"
+
+srcbase="${3:-$GIT_DEV}"
+dstbase="${4:-$GIT_REL}"
+cmnbase="${5:-$GIT_DEV}"
+srcroot=$srcbase/$domain
+dstroot=$dstbase/$domain
+srcskin=$srcroot/src/skin
+dstskin=$dstroot/src/skin
+cmnroot=$cmnbase/Common
+cmnskin=$cmnroot/src/skin
+
+scriptdir=$(dirname "$0")
+
+if [ ! -d "$dstskin" ]; then
+	echo "Error: $dstskin does not exist"
+	exit 1
+fi
+
+tmp=$(mktemp)
+trap 'rm -f "$tmp"' EXIT
+
+for file in "$dstskin/"*; do
+	[ -d "$file" ] || continue
+	skin=$(basename "$file")
+
+	if [ ! -f "$srcskin/$skin/skin.xml" ] && [ ! -f "$srcskin/$skin/skin.yml" ]; then
+		continue
+	fi
+	echo "skin: $skin"
+
+	if [ ! -f "$dstskin/$skin/skin.xml" ]; then
+		echo "no skin.xml at $dstskin/$skin: compile the skin completely first (ymlcompile)"
+		continue
+	fi
+
+	# the skin.xml of the source (generated from skin.yml) is only converted again when skin.yml is newer
+	if [ -f "$srcskin/$skin/skin.yml" ] && { [ ! -f "$srcskin/$skin/skin.xml" ] || [ "$srcskin/$skin/skin.yml" -nt "$srcskin/$skin/skin.xml" ]; }; then
+		echo "converting $srcskin/$skin/skin.yml..."
+		python "$scriptdir/src/yml2xml.py" -i "$srcskin/$skin/skin.yml"
+		python "$scriptdir/src/xmlpretty.py" -i "$srcskin/$skin/skin.xml" -o "$srcskin/$skin/skin.xml"
+	fi
+
+	# the screen itself: a .zmlinc is expanded to .ymlinc when it is newer (.ymlinc to .xmlinc is done by xmlinc)
+	for dir in "$srcskin/$skin" "$srcskin" "$cmnskin/$skin" "$cmnskin"; do
+		if [ -f "$dir/$screen.zmlinc" ] && { [ ! -f "$dir/$screen.ymlinc" ] || [ "$dir/$screen.zmlinc" -nt "$dir/$screen.ymlinc" ]; }; then
+			echo "expanding $dir/$screen.zmlinc..."
+			python "$scriptdir/src/zml2yml.py" -i "$dir/$screen.zmlinc"
+		fi
+	done
+
+	echo "compiling $screen of $srcskin/$skin/skin.xml..."
+	python "$scriptdir/src/xmlinc.py" -i "$srcskin/$skin/skin.xml" -o "$tmp" -d "$dstskin/$skin" -c "$cmnskin/$skin" -s "$screen"
+	sed -i 's/%PLUGIN%/'$domain'/g' "$tmp"
+	python "$scriptdir/src/xmlpretty.py" -i "$tmp" -o "$tmp"
+	python "$scriptdir/src/xmlscreen.py" -i "$tmp" -o "$dstskin/$skin/skin.xml"
+done

@@ -39,5 +39,15 @@ Then compile a plugin's skin, where `<domain>` is the plugin's directory name:
 ```
 zmlcompile <domain> [srcbase] [dstbase] [cmnbase]
 ```
+
+To debug a single screen without compiling all the others, compile the skin completely once, then recompile only the
+`screen_*` file you are working on - its screen replaces the one of the same name in the compiled `skin.xml`:
+
+```
+xmlcompilescreen <domain> <screen_file> [srcbase] [dstbase] [cmnbase]
+```
+
+The other screens are not touched, so a change somewhere else (the globals, a part several screens include) needs a
+full compile.
 ## Wiki
 - https://github.com/xcentaurix/SkinForge/wiki

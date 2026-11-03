@@ -422,6 +422,24 @@ class XMLInclude:
         self.globals["$output_width"], self.globals["$output_height"] = "1920", "1080"
         self.frame_origin = None  # Pos of the frame (see processInclude) placed by what was just processed
         self.last_font_var = None
+        # Only for debugging one screen (xmlcompilescreen): the stems (file name without extension) of the screen_*
+        # files that are compiled. The other screen_* includes of the skin are not (their .ymlinc is not even
+        # converted), see skipsScreen(). None: every screen is compiled.
+        self.screen_filter = None
+        self.screen_include_depth = 0  # how many screen_* files are being processed: their includes are never skipped
+        self.target_screens = set()    # id() of the <screen> elements that came from the files of screen_filter
+
+    def inSkin(self):
+        """True while the skin itself is being processed, not a screen_* file it includes."""
+        return bool(self.screen_filter) and not self.screen_include_depth
+
+    def skipsScreen(self, inc_filename):
+        """True for a screen_* include of the skin itself that is not one of the screens to compile. A screen_* file
+        included by a screen (a panel) is never skipped: it belongs to the screen that includes it."""
+        if not self.inSkin():
+            return False
+        stem = os.path.splitext(os.path.basename(inc_filename))[0]
+        return stem.startswith("screen_") and stem not in self.screen_filter
 
     def getIncFilePath(self, inc_filename):
         if not os.path.splitext(inc_filename)[1]:
@@ -758,6 +776,29 @@ class XMLInclude:
                     max_y = cy if max_y is None else max(max_y, cy)
         return None if max_x is None else (max_x, max_y)
 
+    def exposeIncludeAttrs(self, attrs):
+        """Registers the attributes of an <xmlinc> other than file and position as $vars (size also as
+        $width/$height) and checks the fonts."""
+        resolved_attrs = {}
+        for key, value in attrs.items():
+            if key in {"file", "position"}:
+                continue
+            value = self.resolveValue(value, key)
+            resolved_attrs[key] = value
+            if key == "size":
+                w, h = value.split(",")
+                self.globals["$width"] = w
+                self.globals["$height"] = h
+            self.globals["$" + key] = value
+        self.checkFonts(resolved_attrs)
+
+    def restoreSize(self, saved_size):
+        for var, val in zip(("$width", "$height"), saved_size):
+            if val is None:
+                self.globals.pop(var, None)
+            else:
+                self.globals[var] = val
+
     def processInclude(self, level, node, pos):
         """Resolves one <xmlinc> element: locates the file, registers its
         other attributes as $vars, recurses into it (or splices it in
@@ -765,6 +806,19 @@ class XMLInclude:
         replacement node(s) to substitute in its place."""
         attrs = node.attrs
         inc_filename = self.resolveValue(attrs["file"])
+
+        if self.skipsScreen(inc_filename):
+            # Decided before the file is looked up, as that would convert its .ymlinc. What the full compile would
+            # have left behind for the includes after this one is kept: the attributes of the <xmlinc> are globals
+            # from here on (e.g. imagepath) - the size only for this include.
+            print(f"==> skipping screen: {inc_filename}")
+            saved_size = (self.globals.get("$width"), self.globals.get("$height"))
+            self.exposeIncludeAttrs(attrs)
+            if "size" in attrs:
+                self.restoreSize(saved_size)
+            self.frame_origin = None
+            return None
+
         inc_file = self.getIncFilePath(inc_filename)
 
         if os.path.basename(inc_file).startswith("applet_"):
@@ -783,34 +837,27 @@ class XMLInclude:
         # $width/$height (and anything resolved against them, like this
         # include's position=) are not clobbered by a nested include's size.
         saved_size = (self.globals.get("$width"), self.globals.get("$height"))
-
-        resolved_attrs = {}
-        for key, value in attrs.items():
-            if key in {"file", "position"}:
-                continue
-            value = self.resolveValue(value, key)
-            resolved_attrs[key] = value
-            if key == "size":
-                w, h = value.split(",")
-                self.globals["$width"] = w
-                self.globals["$height"] = h
-            self.globals["$" + key] = value
-        self.checkFonts(resolved_attrs)
+        self.exposeIncludeAttrs(attrs)
 
         # A file whose root <screen> carries frame="..." is a frame (a window drawn on the screen). The
         # content of a screen that places a frame is positioned relative to the frame's origin, see
         # processElement().
         is_frame = isinstance(inc_doc, Element) and inc_doc.tag == "screen" and "frame" in inc_doc.attrs
         self.frame_origin = None
-        result = self.processFile(level + 1, inc_file)
+        is_screen_file = os.path.basename(inc_file).startswith("screen_")
+        is_target = self.inSkin() and os.path.splitext(os.path.basename(inc_filename))[0] in self.screen_filter
+        self.screen_include_depth += is_screen_file
+        try:
+            result = self.processFile(level + 1, inc_file)
+        finally:
+            self.screen_include_depth -= is_screen_file
         inner_origin = self.frame_origin
+        if is_target:
+            self.target_screens.update(id(r) for r in (result if isinstance(result, list) else [result])
+                                       if isinstance(r, Element) and r.tag == "screen")
 
         if "size" in attrs:
-            for var, val in zip(("$width", "$height"), saved_size):
-                if val is None:
-                    self.globals.pop(var, None)
-                else:
-                    self.globals[var] = val
+            self.restoreSize(saved_size)
 
         # Auto-expose the included content's own intrinsic bounding box as
         # $child_width/$child_height, so a parent can size/position things
@@ -899,6 +946,9 @@ class XMLInclude:
             # offsetPositions() call below, once per enclosing level, not
             # by threading a running total down into each recursive call.
             return self.processInclude(level, node, Pos(0, 0))
+
+        if node.tag == "screenfamily" and self.inSkin():
+            return None   # compiling only the screens of some screen_* files: this is none of them
 
         if node.tag == "screenfamily":
             # screens that only differ in name (and title): <screenfamily body="part.xmlinc" ...screen attributes>
@@ -1086,6 +1136,9 @@ def parseArgs(argv):
     parser.add_argument("-o", dest="srcoutfile", required=True, help="destination file")
     parser.add_argument("-d", dest="dstdir", required=True, help="destination dir")
     parser.add_argument("-c", dest="cmndir", required=True, help="common dir")
+    parser.add_argument("-s", dest="screens", action="append", default=None, metavar="SCREEN",
+                        help="compile only this screen_* file (name with or without extension, repeatable); the "
+                             "other screen_* includes of the source file are skipped - see xmlcompilescreen")
     return parser.parse_args(argv)
 
 
@@ -1107,10 +1160,19 @@ def xmlinc(argv):
     print("cmn dir: " + cmndir)
 
     inc = XMLInclude(srcdir, dstdir, cmndir)
+    if args.screens:
+        inc.screen_filter = {os.path.splitext(os.path.basename(s))[0] for s in args.screens}
     result = inc.processFile(0, srcinfile)
 
     lines = []
     nodes = result if isinstance(result, list) else [result]
+    if inc.screen_filter:
+        # only the screens of the files asked for: the other files of the skin that define screens (not named
+        # screen_*) were compiled too, as their content is not known before
+        for node in nodes:
+            if isinstance(node, Element) and node.children:
+                node.children = [c for c in node.children
+                                 if not (isinstance(c, Element) and c.tag == "screen" and id(c) not in inc.target_screens)]
     for node in nodes:
         renderNode(node, lines)
     output = "\n".join(lines) + "\n"
