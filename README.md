@@ -1,4 +1,4 @@
-# SkinForge - Next generation Enigma2 skin design
+  # SkinForge - Next generation Enigma2 skin design
 
 SkinForge is a skin design kit that encompasses
 - a hierarchical building block concept with
@@ -19,7 +19,6 @@ SkinForge is a skin design kit that encompasses
 flowchart TD
     ZML[".zml / .zmlinc<br/>ZAML source"] -->|zml2ymldomain| YML
     YML[".yml / .ymlinc<br/>YAML source"] -->|"yml2xmldomain (.yml only)"| XMLP
-    YML -.->|"on demand, temp .xmlinc"| FLAT
     HAND["hand-written XML+"] -.-> XMLP
     XMLP[".xml / .xmlinc<br/>XML+ source"] -->|"xmlprettydomain, then xmlinc"| FLAT
     COMMON[("Common/<br/>shared building blocks")] -.->|resolved by xmlinc| FLAT

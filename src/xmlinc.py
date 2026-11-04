@@ -174,7 +174,9 @@ KNOWN_BASE_COLORS = {
 }
 
 VAR_RE = re.compile(r"\$\w+")
-DEFAULT_TAG_SELECTOR_RE = re.compile(r"^(?P<tag>\w+)(?:\[render=(?P<render>[^\]]+)\])?$")
+# tag="widget", tag="widget[render=Label]" (only the widgets of that render) or tag="widget[itemHeight]" (only the widgets that
+# set that attribute themselves)
+DEFAULT_TAG_SELECTOR_RE = re.compile(r"^(?P<tag>\w+)(?:\[(?:render=(?P<render>[^\]=]+)|(?P<has>\w+))\])?$")
 
 
 # ---------------------------------------------------------------------------
@@ -722,6 +724,8 @@ class XMLInclude:
                 m = DEFAULT_TAG_SELECTOR_RE.match(n.attrs["tag"])
                 base_tag = m.group("tag") if m else n.attrs["tag"]
                 render_value = m.group("render") if m else None
+                if m and m.group("has"):
+                    render_value = "has:" + m.group("has")
                 target = self.defaults.setdefault(base_tag, {}).setdefault(render_value or "*", {})
                 target.update({k: v for k, v in n.attrs.items() if k != "tag"})
             if n.children:
@@ -963,7 +967,12 @@ class XMLInclude:
                     continue
                 merged = dict(attrs)
                 merged.update(member.attrs)
-                body_include = Element("xmlinc", {"file": body, "position": body_position}, None, None)
+                # a member can hand a value to the body: content="..." is not a screen attribute but the $content of the
+                # body (the name, without extension, of the part a frame body like screenpart_ScreenLarge includes)
+                include_attrs = {"file": body, "position": body_position}
+                if "content" in merged:
+                    include_attrs["content"] = merged.pop("content")
+                body_include = Element("xmlinc", include_attrs, None, None)
                 screens.append(self.processElement(level, Element("screen", dict(sorted(merged.items())), [body_include], None)))
             return screens
 
@@ -1043,6 +1052,9 @@ class XMLInclude:
             default_dicts = []
             if render_value is not None and render_value in tag_defaults:
                 default_dicts.append(tag_defaults[render_value])
+            for selector, values in tag_defaults.items():
+                if selector.startswith("has:") and selector[4:] in new_attrs:
+                    default_dicts.append(values)
             if "*" in tag_defaults:
                 default_dicts.append(tag_defaults["*"])
             for defaults in default_dicts:
