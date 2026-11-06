@@ -23,7 +23,7 @@ if [ -f "$1" ]; then
 		[ -n "$commondir" ] && [ "$commondir" != "$srcdir" ] && incdirs+=("$commondir")
 		incdirs+=("$srcdir")
 		for incdir in "${incdirs[@]}"; do
-			for inc in fonts.xmlinc colors.xmlinc radii.xmlinc frames.xmlinc screenpart_globals.xmlinc globals.xmlinc display_globals.xmlinc; do
+			for inc in fonts.xmlinc colors.xmlinc radii.xmlinc frames.xmlinc lists.xmlinc screenpart_globals.xmlinc globals.xmlinc display_globals.xmlinc; do
 				[ "$inc" != "$(basename "$src")" ] && [ -f "$incdir/$inc" ] && extra+=(--include "$incdir/$inc")
 			done
 		done

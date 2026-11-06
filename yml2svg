@@ -3,7 +3,7 @@
 # Draws the layout of a YAML skin source: the source is converted to a temporary .xmlinc (yml2xml) and
 # handed to xml2svg, the temporary file is removed again. With no dst the .svg is written next to the source.
 # Includes (<xmlinc>) are looked up in the directory of the source, or in --srcdir if given; a .ymlinc
-# include is converted on demand like in a real build. fonts, colors, radii, frames,
+# include is converted on demand like in a real build. fonts, colors, radii, frames, lists,
 # screenpart_globals, globals (the plugin's own, after the shared ones: it wins) and display_globals (fonts and colors of a front panel skin) of the shared
 # Common/src/skin (next to this tool's directory) and then of that directory (.xmlinc, or else .ymlinc) are included automatically if present.
 # Without -c, includes are also looked up in Common/src/skin/<skin>, then Common/src/skin, like the build does.
@@ -50,7 +50,7 @@ incdirs=()
 [ -n "$commondir" ] && [ "$commondir" != "$(cd "$srcdir" && pwd)" ] && incdirs+=("$commondir")
 incdirs+=("$srcdir")
 for incdir in "${incdirs[@]}"; do
-	for inc in fonts colors radii frames screenpart_globals globals display_globals; do
+	for inc in fonts colors radii frames lists screenpart_globals globals display_globals; do
 		[ "$inc" = "$(basename "${src%.*}")" ] && continue   # not the file itself
 		if [ -f "$incdir/$inc.xmlinc" ]; then
 			extra+=(--include "$incdir/$inc.xmlinc")
