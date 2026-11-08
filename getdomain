@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Colocated copy of git/tools/getdomain, so SkinForge doesn't depend on
+# git/tools being on PATH. Identical logic, except the bare-domain-name
+# fallback's relative path below is adjusted for living one level deeper
+# (git/dev/SkinForge, not git/tools) - see the comment at that line.
+
+if [ -z "$1" ]; then
+    echo ""
+    exit 1
+fi
+
+if [ "$1" = "." ]; then
+    path="$PWD"
+else
+    path="$1"
+fi
+
+if [[ "$path" == *"/git/rel/"* ]]; then
+    domain="${path#*/git/rel/}"
+elif [[ "$path" == *"/git/dev/"* ]]; then
+    domain="${path#*/git/dev/}"
+else
+    # Not a /git/dev/ or /git/rel/ path at all - could already be a bare
+    # domain name (e.g. "MovieCockpit"), but only accept it as one if a
+    # matching directory genuinely exists under git/dev - never blindly
+    # echo back whatever string was passed in. This script lives at
+    # git/dev/SkinForge (one level deeper than git/tools/getdomain, which
+    # this is a copy of), so git/dev itself is "$script_dir/..", not
+    # "$script_dir/../dev" the way it is for the tools/ original.
+    candidate="${path%%/*}"
+    script_dir="$(dirname "$0")"
+    if [ -d "$script_dir/../$candidate" ]; then
+        domain="$candidate"
+    else
+        echo ""
+        exit 1
+    fi
+fi
+domain="${domain%%/*}"
+if [[ "$domain" =~ [a-zA-Z] ]]; then
+    echo $domain
+    exit 0
+else
+    echo ""
+    exit 1
+fi

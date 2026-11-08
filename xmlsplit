@@ -1,0 +1,19 @@
+#!/bin/bash
+src="$1"
+
+if [ -z "$src" ]; then
+	echo "$0 <input file>"
+	exit 1
+fi
+
+if [ ! -f "$src" ]; then
+	echo "Input file $src does not exist"
+	exit 1
+fi
+
+output=$(python "$(dirname "$0")"/src/xmlsplit.py -i "$src")
+echo "$output"
+echo "$output" | grep '^GENERATED: ' | sed 's/^GENERATED: //' | while read -r file; do
+	echo "Prettifying $file..."
+	python "$(dirname "$0")"/src/xmlpretty.py -i "$file" -o "$file"
+done

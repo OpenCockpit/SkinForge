@@ -1,0 +1,23 @@
+#!/bin/bash
+. "$(dirname "$0")/common"
+
+domain=$("$(dirname "$0")/getdomain" "$1")
+echo "Domain: $domain"
+if [ -z "$domain" ]; then
+	echo "Error: not inside a recognized git/dev or git/rel domain directory"
+	exit 1
+fi
+
+skin="${2:-default}"
+base="${3:-$GIT_DEV}"
+git="$base/$domain"
+echo git: $git
+
+for file in $git/src/skin/*.*xml* $git/src/skin/$skin/*.*xml*; do
+	# only .xml and .xmlinc: the glob also matches backups such as skin.xml.org
+	case "$file" in *.xml|*.xmlinc) ;; *) continue ;; esac
+	if [ -f "$file" ]; then
+		echo "Processing $file..."
+		python "$(dirname "$0")"/src/xml2yml.py -i "$file"
+	fi
+done

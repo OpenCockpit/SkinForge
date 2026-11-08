@@ -1,0 +1,16 @@
+#!/bin/bash
+# Shared base paths for the SkinForge scripts - source this near the top of
+# a script (". "$(dirname "$0")/common"") instead of hardcoding $HOME/git/...
+# in multiple places. Mirrors git/tools/common (kept as a separate,
+# colocated copy rather than a cross-directory reference to that file,
+# since these scripts already depend on git/tools/getdomain via PATH, not
+# a relative path, and a source line has no equivalent PATH-style lookup).
+# Only stable constants belong here - a per-invocation value like $domain
+# still has to be derived by each script itself.
+GIT_BASE="$HOME/git"
+GIT_DEV="$GIT_BASE/dev"
+GIT_REL="$GIT_BASE/rel"
+GIT_PKG="$GIT_BASE/pkg"
+GIT_COMMON="$GIT_DEV/Common"
+GIT_SKINFORGE="$GIT_DEV/SkinForge"
+GIT_FEED="$GIT_REL/Cockpit-Feed"

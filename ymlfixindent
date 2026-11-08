@@ -1,0 +1,43 @@
+#!/bin/bash
+# Checks (and, with --fix, corrects) indentation width in a domain's .yml/
+# .ymlinc/.zml/.zmlinc skin sources - see src/checkindent.py's own module
+# docstring for why this matters: yml2xml.py's YamlParser hardcodes every
+# nested block at exactly parent_indent+2 and silently treats anything
+# indented by a different (even if internally consistent) width as absent,
+# rather than erroring - screenpart_MovieList.ymlinc's real bug this
+# session was exactly that, with no compile-time warning at all.
+#
+# Usage: checkindent [--fix] [domain-or-.] [skin] [base]
+# Same domain/skin/base resolution as ymlcompile/yml2xmldomain (see
+# README's "Quick start") - run from inside a domain's checkout to use ".".
+. "$(dirname "$0")/common"
+
+fix=""
+if [ "$1" = "--fix" ]; then
+	fix="--fix"
+	shift
+fi
+
+domain=$("$(dirname "$0")/getdomain" "$1")
+if [ -z "$domain" ]; then
+	echo "Error: not inside a recognized git/dev or git/rel domain directory"
+	exit 1
+fi
+echo "Domain: $domain"
+
+skin="${2:-default}"
+base="${3:-$GIT_DEV}"
+git="$base/$domain"
+
+files=()
+for pattern in "$git/src/skin"/*.yml "$git/src/skin"/*.ymlinc "$git/src/skin"/*.zml "$git/src/skin"/*.zmlinc \
+               "$git/src/skin/$skin"/*.yml "$git/src/skin/$skin"/*.ymlinc "$git/src/skin/$skin"/*.zml "$git/src/skin/$skin"/*.zmlinc; do
+	[ -f "$pattern" ] && files+=("$pattern")
+done
+
+if [ "${#files[@]}" -eq 0 ]; then
+	echo "checkindent: no .yml/.ymlinc/.zml/.zmlinc files found under $git/src/skin"
+	exit 1
+fi
+
+python "$(dirname "$0")/src/checkindent.py" $fix "${files[@]}"

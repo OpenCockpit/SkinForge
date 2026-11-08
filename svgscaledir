@@ -1,0 +1,21 @@
+#!/bin/bash
+scale=$1
+src=$2
+
+if [ -z $1 ] || [ -z $2 ]; then
+	echo "$0 <scaling factor> <source directory>"
+	exit
+fi
+
+echo scaling all svgs recursively in $src, scaling factor: $scale
+
+find $src -type f -name '*.svg' -print0 |
+grep -z -E '\.svg$' |
+
+while read -d $'\0' file; do
+	echo scaling "$file..."
+	cp "$file" $HOME/tmp/.
+	filename=$HOME/tmp/$(basename "$file")
+	python "$(dirname "$0")"/src/svgscale.py -s $scale -i "$HOME/tmp/$filename" -o "$file"
+	rm "$HOME/tmp/$filename"
+done

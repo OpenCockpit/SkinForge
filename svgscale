@@ -1,0 +1,11 @@
+#!/bin/bash
+scale=$1
+src=$2
+dst=$3
+
+if [ -z $1 ] || [ -z $2 ] || [ -z $3 ]; then
+	echo "$0 <scaling factor> <source file> <destination file>"
+else
+	echo scaling svg from $src to $dst, scaling factor: $scale
+	python "$(dirname "$0")"/src/svgscale.py -s $scale -i $src -o $dst
+fi

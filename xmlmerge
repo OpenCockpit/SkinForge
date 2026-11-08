@@ -1,0 +1,10 @@
+#!/bin/bash
+src1=$1
+src2=$2
+dst=$3
+
+if [ -z $1 ] || [ -z $2 ] || [ -z $3 ]; then
+	echo "$0 <source file 1> <source file 2> <destination file>"
+else
+	python "$(dirname "$0")"/src/xmlmerge.py -i $src1 -j $src2 -o $dst
+fi

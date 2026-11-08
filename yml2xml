@@ -1,0 +1,11 @@
+#!/bin/bash
+src=$1
+dst=$2
+
+if [ -z "$1" ]; then
+	echo "$0 <source file> [destination file]"
+elif [ -z "$2" ]; then
+	python "$(dirname "$0")"/src/yml2xml.py -i $src
+else
+	python "$(dirname "$0")"/src/yml2xml.py -i $src -o $dst
+fi

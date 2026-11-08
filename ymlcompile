@@ -1,0 +1,68 @@
+#!/bin/bash
+. "$(dirname "$0")/common"
+
+domain=$("$(dirname "$0")/getdomain" "$1")
+if [ -z "$domain" ]; then
+	echo no valid domain specified
+	exit 1
+fi
+echo "Domain: $domain"
+
+srcbase="${2:-$GIT_DEV}"
+dstbase="${3:-$GIT_REL}"
+cmnbase="${4:-$GIT_DEV}"
+srcroot=$srcbase/$domain
+dstroot=$dstbase/$domain
+srcskin=$srcroot/src/skin
+dstskin=$dstroot/src/skin
+cmnroot=$cmnbase/Common
+cmnskin=$cmnroot/src/skin
+
+scriptdir=$(dirname "$0")
+
+if [ ! -d "$dstskin" ]; then
+	echo "Error: $dstskin does not exist"
+	exit 1
+fi
+
+for file in "$dstskin/"*; do
+	[ -d "$file" ] || continue
+	skin=$(basename "$file")
+
+	# a skin is the plugin's own source: skin.xml, or the skin.yml/skin.zml it is generated from (a source tree of
+	# a yml/zml based plugin need not keep the generated skin.xml)
+	if [ ! -f "$srcskin/$skin/skin.xml" ] && [ ! -f "$srcskin/$skin/skin.yml" ] && [ ! -f "$srcskin/$skin/skin.zml" ]; then
+		echo "skin: $skin: no skin.xml, skin.yml or skin.zml in $srcskin/$skin, skipping"
+		continue
+	else
+		echo "skin: $skin"
+
+		# convert yml to xml if a *.yml/*.ymlinc changed in cmn for this variant
+		if [ -n "$(git -C "$cmnroot" status --porcelain -- "src/skin/*.yml" "src/skin/*.ymlinc" "src/skin/$skin/*.yml" "src/skin/$skin/*.ymlinc" 2>/dev/null)" ]; then
+			echo "cmn yml changed, reconverting..."
+			(cd "$cmnroot" && "$scriptdir/yml2xmldomain" . "$skin" "$cmnbase")
+			(cd "$cmnroot" && "$scriptdir/xmlprettydomain" . "$skin" "$cmnbase")
+		else
+			echo "cmn yml unchanged, skipping conversion"
+		fi
+
+		# convert yml to xml if a *.yml/*.ymlinc changed in src for this variant
+		if [ ! -f "$srcskin/$skin/skin.xml" ] || [ -n "$(git -C "$srcroot" status --porcelain -- "src/skin/*.yml" "src/skin/*.ymlinc" "src/skin/$skin/*.yml" "src/skin/$skin/*.ymlinc" 2>/dev/null)" ]; then
+			echo "src yml changed or no skin.xml, reconverting..."
+			(cd "$srcroot" && "$scriptdir/yml2xmldomain" . "$skin" "$srcbase")
+			(cd "$srcroot" && "$scriptdir/xmlprettydomain" . "$skin" "$srcbase")
+		else
+			echo "src yml unchanged, skipping conversion"
+		fi
+
+		# compile the xml source
+		if [ -f "$srcskin/$skin/skin.xml" ]; then
+			echo "compiling $dstskin/$skin/skin.xml..."
+			"$scriptdir/xmlinc" "$srcskin/$skin/skin.xml" "$dstskin/$skin/skin.xml" "$dstskin/$skin" "$cmnskin/$skin"
+			sed -i 's/%PLUGIN%/'$domain'/g' "$dstskin/$skin/skin.xml"
+			"$scriptdir/xmlpretty" "$dstskin/$skin/skin.xml" "$dstskin/$skin/skin.xml"
+		else
+			echo "no skin.xml at $dstskin/$skin, skipping compile"
+		fi
+	fi
+done

@@ -1,0 +1,8 @@
+#!/bin/bash
+src="$1"
+dst="$2"
+if [ -z "$src" ] || [ -z "$dst" ]; then
+	echo "$0 <SVG from xml2svg.py, possibly edited> <dst .xml/.xmlinc file>"
+	exit 1
+fi
+python "$(dirname "$0")"/src/svg2xml.py -i "$src" -o "$dst"

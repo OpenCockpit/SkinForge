@@ -1,53 +1,52 @@
-# SkinForge - A toolset for creating and "hammering" enigma2 skins
+  # SkinForge - Next generation Enigma2 skin design
 
-## Introduction
-An enigma2 skin is a flat xml data structure, no hierarchical includes, no macros, no relative positioning of screen elements, no high level framework, no automatic scaling... no nothing. :-)
+SkinForge is a skin design kit that encompasses
+- a hierarchical building block concept with
+  - shared building blocks (buttons, title bars, lists, screen parts, ...) that live in one place and are reused by all your plugins
+  - relative positioning of building blocks
+  - global variables
+- an offline skin compiler that lets you write skins in a richer, hierarchical language and compiles them down to the plain, flat XML enigma2 actually loads
+- a 3-tier high level skin defintion language plus converters to translate it to/from XML
 
-## Motivation
-So, creating and scaling skins for enigma2 is a task for someone who has killed their father and mother.
-If you have a set of plugins you probably would like to have the same look and feel across all plugins. You may also want to maintain changes of skin elements only in one spot instead of having to maintain multiple instances of the same code in several plugins.
+## Language levels
 
-## Objective
-I came up with an object oriented approach that sort of provides data encapsulation, inheritance, and reuse of skin elements across multiple skin screens and plugins.
-In addition the solution allows for relative positions of skin elements, and automatic scaling of skin elements or complete skins.
+0. **XML**: the flat XML enigma2 itself understands; nothing to compile.
+1. **XML+**: hierarchical XML with includes, variables, relative positioning and compile-time color/formula checking (`xmlcompile`).
+2. **YAML**: a readable YAML dialect (`skin.yml` / `*.ymlinc`) that round-trips to and from XML+ (`ymlcompile`).
+3. **ZAML** (Zenith Advanced Markup Language): YAML plus a `for`-loop for repeated blocks (`zmlcompile`).
 
-
-## Status
-This project is work in progress.
-
-Tools available:
-- xmlscale:
-```
-    xmlscale <scale> <input-file> <outpout-file>
-```
-- svgscale (only works on pc, as librsvg2-bin is not available on the box):
-```
-    svgscale <scale> <svg-file>
-```
-- svgscaledir (including subdirs):
-```
-    svgscaldir <scale> <dir>
+```mermaid
+flowchart TD
+    ZML[".zml / .zmlinc<br/>ZAML source"] -->|zml2ymldomain| YML
+    YML[".yml / .ymlinc<br/>YAML source"] -->|"yml2xmldomain (.yml only)"| XMLP
+    HAND["hand-written XML+"] -.-> XMLP
+    XMLP[".xml / .xmlinc<br/>XML+ source"] -->|"xmlprettydomain, then xmlinc"| FLAT
+    COMMON[("Common/<br/>shared building blocks")] -.->|resolved by xmlinc| FLAT
+    FLAT["flat XML<br/>compiled, unformatted"] -->|xmlpretty| FINAL(["skin.xml<br/>what enigma2 loads"])
 ```
 
+## Quick start
 
-## Installation
-No package available, just clone the git: "git clone git@github.com:dream-alpha/SkinForge.git"
+Clone the repo and add the git dir to the PATH variable:
 
+```
+git clone git@github.com:OpenCockpit/SkinForge.git
+```
 
-## Example for relative skin includes
-main file: Example.xml
+Then compile a plugin's skin, where `<domain>` is the plugin's directory name:
 
-    <skin>
-        <screen>
-            <xmlinc name=buttons position="100,200" />
-        </screen>
-    </skin>
+```
+zmlcompile <domain> [srcbase] [dstbase] [cmnbase]
+```
 
-include file: buttons.xmlinc
+To debug a single screen without compiling all the others, compile the skin completely once, then recompile only the
+`screen_*` file you are working on - its screen replaces the one of the same name in the compiled `skin.xml`:
 
-    <ePixmap pixmap="Default-FHD/skin_default/buttons/red.svg" position="0,0" size="300,70" />
-    <ePixmap pixmap="Default-FHD/skin_default/buttons/green.svg" position="300,0" size="300,70" />
-    <ePixmap pixmap="Default-FHD/skin_default/buttons/yellow.svg" position="600,0" size="300,70" />
-    <ePixmap pixmap="Default-FHD/skin_default/buttons/blue.svg" position="900,0" size="300,70" />
+```
+xmlcompilescreen <domain> <screen_file> [srcbase] [dstbase] [cmnbase]
+```
 
-The position of the red button will be: "100,200", the position of the green button will be "400,200".
+The other screens are not touched, so a change somewhere else (the globals, a part several screens include) needs a
+full compile.
+## Wiki
+- https://github.com/xcentaurix/SkinForge/wiki
