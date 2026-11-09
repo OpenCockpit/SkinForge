@@ -120,7 +120,7 @@ TEXT_BODY_TAGS = {"applet", "convert"}
 # compiler only or have a text body of their own: they are not drawn, and an _src would be taken for a variable on an
 # <xmlinc>.
 MARK_ATTR = "_src"
-NO_MARK_TAGS = {"xmlinc", "global", "local", "default", "screenfamily", "layout", "applet", "convert"}
+NO_MARK_TAGS = {"xmlinc", "global", "local", "param", "default", "defaults", "screenfamily", "layout", "applet", "convert"}
 
 
 class Commented:
@@ -747,9 +747,78 @@ def fromDomainCell(cell):
     return body
 
 
+def isIfKey(key, value):
+    """A key "if <condition>" with a mapping under it, in a default widget (a child of <defaults>): the defaults that apply only
+    when the condition is met."""
+    return isinstance(key, str) and key.startswith("if ") and isinstance(value, dict)
+
+
+def expandIfBlocks(tag, body):
+    """A default widget (a child of <defaults>) can carry its conditional defaults in the same block:
+
+        - defaults:
+            children:
+              - widget:
+                  zPosition: "1"                      # for every widget
+                  if itemCornerRadius:                # for the widgets that have an itemCornerRadius
+                    scrollbarMode: "showNever"
+                  if render=Listbox:                  # ifs can be nested: both conditions have to be met
+                    if scrollbarMode=showOnDemand:
+                      scrollbarWidth: "5"
+                    else:                             # the opposite of the if before it (a single condition)
+                      scrollbarWidth: "0"
+                  if not satPosLeft and valign!=top:  # not, !=, and
+
+    This is written out as one flat default element per block (what xmlinc's scanDefaults reads), with the
+    conditions as its if="..." attribute. Returns the list of (attrs) of the elements, the unconditional one first."""
+    from xmlinc import parseConditions, negateCondition, conditionText    # here: xmlinc imports this module on demand
+    elements = []
+
+    def expand(block, inherited):
+        values = {k: v for k, v in block.items() if not isIfKey(k, v) and not (k == "else" and isinstance(v, dict))}
+        if values:
+            flat = dict(values)
+            if inherited:
+                flat["if"] = " and ".join(conditionText(c) for c in inherited)
+            elements.append(flat)
+        previous = None    # the conditions of the if that an else belongs to
+        for key, sub in block.items():
+            if isIfKey(key, sub):
+                try:
+                    previous = parseConditions(key[len("if "):])
+                except ValueError as e:
+                    print(f"ERROR: {tag}: '{key}': {e}")
+                    previous = None    # the block is left out: it must not become a default for every element
+                    continue
+                expand(sub, inherited + previous)
+            elif key == "else" and isinstance(sub, dict):
+                if previous is None:
+                    print(f"ERROR: {tag}: else without an if in front of it (or the if could not be read)")
+                elif len(previous) != 1:
+                    print(f"ERROR: {tag}: else after an if with several conditions: use 'if not ...' instead")
+                else:
+                    expand(sub, inherited + [negateCondition(previous[0])])
+                previous = None
+
+    expand(body, [])
+    return elements
+
+
 def renderNode(tag, body, level, lines, mark=None, line=None):
     body = body or {}
     prefix = INDENT * level
+
+    if tag == "defaults":
+        # the default widgets inside are no elements of the skin: written out flat (see expandIfBlocks), without marks
+        lines.append(f"{prefix}<defaults>")
+        for item in body.get("children") or []:
+            if isinstance(item, Commented) and item.comment:
+                lines.append(f"{prefix}{INDENT}<!-- {item.comment} -->")
+            (child_tag, child_body), = unwrap(item).items()
+            for attrs in expandIfBlocks(child_tag, child_body or {}):
+                renderNode(child_tag, attrs, level + 1, lines)
+        lines.append(f"{prefix}</defaults>")
+        return
 
     if tag == "convert" and ("cell" in body or any(k in body for k in TEMPLATE_KEYS)):
         attr_str = renderAttrs(tag, {"type": body.get("type", "")})
@@ -845,6 +914,8 @@ def parseArgs(argv):
     parser.add_argument("-i", dest="srcinfile", required=True, help="source .yml/.ymlinc file")
     parser.add_argument("-o", dest="srcoutfile", default=None,
                         help="destination .xml/.xmlinc file (default: input filename with opposite extension)")
+    parser.add_argument("--marks-path", dest="marks_path", action="store_true",
+                        help="with --marks: the _src names the file with the path as given, not only its name")
     parser.add_argument("--marks", dest="marks", action="store_true",
                         help="give every element an _src=\"file:line\" attribute pointing back to its line in the "
                              "source (for xml2svg, which prints it on the box; not for a skin.xml that is shipped)")
@@ -866,7 +937,7 @@ def main(argv):
         sys.exit(1)
 
     is_full_document = args.srcinfile.endswith(".yml")
-    output = yml2xml(readFile(args.srcinfile), is_full_document, os.path.basename(args.srcinfile) if args.marks else None)
+    output = yml2xml(readFile(args.srcinfile), is_full_document, (args.srcinfile if args.marks_path else os.path.basename(args.srcinfile)) if args.marks else None)
     writeFile(srcoutfile, output)
 
     # print("yml2xml done.")

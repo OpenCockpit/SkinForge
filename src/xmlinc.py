@@ -20,6 +20,7 @@ from FileUtils import readFile, writeFile
 # run into the source tree) into a temporary directory that is removed when
 # this run ends.
 _generated_xmlinc = {}   # source .ymlinc path -> generated temp .xmlinc path
+markFullPath = False     # --marks: the _src of an element names the .ymlinc with its whole path (see --redundant)
 markSources = False      # xml2svg sets it: the generated .xmlinc carry _src="file:line" attributes (see yml2xml.py)
 reportOnlyAttrs = None   # xml2svg sets it: an unknown $var is only an error in these attributes (None: in all of them)
 _generated_dir = None
@@ -57,7 +58,8 @@ def generateXmlinc(xmlinc_path):
     os.makedirs(out_dir)
     out = os.path.join(out_dir, os.path.basename(base) + ".xmlinc")
     print(f"==> generating {out} from {yml_path}")
-    writeFile(out, yml2xml(readFile(yml_path), False, os.path.basename(yml_path) if markSources else None))
+    mark = (os.path.normpath(yml_path) if markFullPath else os.path.basename(yml_path)) if markSources else None
+    writeFile(out, yml2xml(readFile(yml_path), False, mark))
     process_file(out, out)
     _generated_xmlinc[key] = out
     return out
@@ -174,9 +176,59 @@ KNOWN_BASE_COLORS = {
 }
 
 VAR_RE = re.compile(r"\$\w+")
-# tag="widget", tag="widget[render=Label]" (only the widgets of that render) or tag="widget[itemHeight]" (only the widgets that
-# set that attribute themselves)
+# The old form of a default: <default tag="widget" .../>, tag="widget[render=Label]" (only the widgets of that render) or
+# tag="widget[itemHeight]" (only the widgets that set that attribute themselves). See scanDefaults for the current form.
 DEFAULT_TAG_SELECTOR_RE = re.compile(r"^(?P<tag>\w+)(?:\[(?:render=(?P<render>[^\]=]+)|(?P<has>\w+))\])?$")
+
+# One condition of a default: [not] attribute, attribute=value or attribute!=value
+CONDITION_RE = re.compile(r"^(?:(?P<neg>not)\s+)?(?P<attr>\w+)\s*(?:(?P<op>!=|=)\s*(?P<value>.+))?$")
+
+
+def parseConditions(text):
+    """The conditions of a default (the "if" of a <defaults> entry): "render=Listbox and not itemCornerRadius". Returns
+    a list of (attribute, op, value), op being "has" (the attribute is there, whatever its value), "absent", "eq" or "ne"
+    (value is None for the first two). ValueError for a text that cannot be read."""
+    conditions = []
+    for part in re.split(r"\s+and\s+", text.strip()):
+        m = CONDITION_RE.match(part.strip())
+        if m is None:
+            raise ValueError(f"cannot read the condition '{part}' (attribute, not attribute, attribute=value or attribute!=value)")
+        negated = m.group("neg") is not None
+        if m.group("op") is None:
+            conditions.append((m.group("attr"), "absent" if negated else "has", None))
+        else:
+            equal = (m.group("op") == "=") != negated    # "not a=b" is "a!=b"
+            conditions.append((m.group("attr"), "eq" if equal else "ne", m.group("value").strip()))
+    return conditions
+
+
+def negateCondition(condition):
+    """The condition that is met when this one is not (for the else of an if)."""
+    attr, op, value = condition
+    return (attr, {"has": "absent", "absent": "has", "eq": "ne", "ne": "eq"}[op], value)
+
+
+def conditionText(condition):
+    attr, op, value = condition
+    return {"has": attr, "absent": f"not {attr}", "eq": f"{attr}={value}", "ne": f"{attr}!={value}"}[op]
+
+
+def conditionHolds(condition, attrs):
+    """Whether an element with these attributes meets the condition."""
+    attr, op, value = condition
+    if op == "has":
+        return attr in attrs
+    if op == "absent":
+        return attr not in attrs
+    if op == "eq":
+        return attrs.get(attr) == value
+    return attrs.get(attr) != value
+
+
+def isDefaultElement(tag):
+    """True for the elements that declare defaults (<defaults> with default widgets in it, and the old <default tag=.../>):
+    they are for the compiler only and never appear in the compiled output."""
+    return tag in {"defaults", "default"}
 
 
 # ---------------------------------------------------------------------------
@@ -415,7 +467,13 @@ class XMLInclude:
         self.colors = {}
         self.font_aliases = {}   # <alias name=... font=... size=.../> declarations: name -> (face, size)
         self.font_defs = {}      # <font name=... filename=... scale=.../> declarations: name -> (filename, scale in %)
-        self.defaults = {}
+        # the default widgets (<defaults>): tag -> {conditions: {"values", "order", "conditions"}}, see scanDefaults
+        self.default_rules = {}
+        self.default_order = 0
+        self.default_filled = {}   # (tag, rule, attribute) -> how many elements got the attribute from that rule
+        # --redundant: (_src, attribute) -> [how often the element was compiled with it, how often the attribute was the same as the
+        # default that would have been filled in], see applyDefaults. None: not asked for.
+        self.redundant_report = None
         self.current_screen = "?"
         self.current_file = ""
         self.output_size = None  # (xres, yres) of the <resolution> declared by the skin, if any
@@ -699,37 +757,130 @@ class XMLInclude:
             if n.children:
                 self.scanColors(n.children)
 
-    def scanDefaults(self, node):
-        """Pre-scans an about-to-be-included file's own tree for <default
-        tag=... .../> declarations, feeding self.defaults - same timing
-        and rationale as scanColors() above. Every attribute on a
-        <default> other than "tag" itself is a default value for that
-        tag; a later declaration for the same tag+attr overrides an
-        earlier one (last-scanned wins), the same as any other $var/color
-        redeclaration in this toolset.
+    def addDefaultRule(self, tag, conditions, values):
+        """Adds the default values of one default widget (or screen, ...): tag is the element they are for, conditions a
+        tuple of (attribute, op, value) that the element must meet (see parseConditions).
+        A later declaration with the same tag and conditions (in another file, say) adds to the earlier one: the same
+        attribute is overridden, the others stay."""
+        rules = self.default_rules.setdefault(tag, {})
+        rule = rules.setdefault(conditions, {"values": {}, "order": 0, "conditions": conditions})
+        rule["values"].update(values)
+        rule["order"] = self.default_order    # declared last = wins between rules that are equally specific
+        self.default_order += 1
 
-        "tag" may optionally narrow the match to one render variant of
-        that tag, e.g. tag="widget[render=Label]" - self.defaults is then
-        keyed self.defaults[base_tag][render_value], with the unqualified
-        tag="widget" form stored under the "*" key (matches any render,
-        and any element with no render attribute at all). A malformed
-        selector (anything not matching DEFAULT_TAG_SELECTOR_RE) is
-        stored verbatim as its own base tag under "*", same as before -
-        it just won't match any real element, rather than crashing."""
+    def scanDefaults(self, node):
+        """Pre-scans an about-to-be-included file's own tree for the declarations of defaults, feeding
+        self.default_rules - same timing and rationale as scanColors() above (a default is in force from the file that
+        declares it being reached by an include on).
+
+        <defaults> holds the default widgets (and default screens, ...), each written like the element it is a default
+        for, with the attributes it fills in when an element does not set them itself:
+        <defaults><widget zPosition="1" transparent="1"/></defaults> for every widget. An if="..." on it says when it
+        applies (see parseConditions): <widget if="render=Listbox and not itemCornerRadius" .../>. The conditions are
+        about what the element itself sets, not about what other defaults fill in. All the other attributes are the
+        values. Between the defaults that apply to one element the more specific one (more conditions) wins, between
+        equally specific ones the one declared last.
+
+        The old form, <default tag="widget[render=Label]" .../>, is read as the same thing."""
         nodes = node if isinstance(node, list) else [node]
         for n in nodes:
             if isinstance(n, Comment):
                 continue
             if n.tag == "default" and "tag" in n.attrs:
                 m = DEFAULT_TAG_SELECTOR_RE.match(n.attrs["tag"])
-                base_tag = m.group("tag") if m else n.attrs["tag"]
-                render_value = m.group("render") if m else None
-                if m and m.group("has"):
-                    render_value = "has:" + m.group("has")
-                target = self.defaults.setdefault(base_tag, {}).setdefault(render_value or "*", {})
-                target.update({k: v for k, v in n.attrs.items() if k != "tag"})
+                if m is None:
+                    print(f"ERROR: default tag={n.attrs['tag']}: not a tag, tag[render=value] or tag[attribute]")
+                else:
+                    conditions = ()
+                    if m.group("render"):
+                        conditions = (("render", "eq", m.group("render")),)
+                    elif m.group("has"):
+                        conditions = ((m.group("has"), "has", None),)
+                    self.addDefaultRule(m.group("tag"), conditions, {k: v for k, v in n.attrs.items() if k != "tag"})
+            elif n.tag == "defaults":
+                for child in n.children or []:
+                    if not isinstance(child, Element):
+                        continue
+                    conditions = ()
+                    if "if" in child.attrs:
+                        try:
+                            conditions = tuple(sorted(parseConditions(child.attrs["if"]), key=str))
+                        except ValueError as e:
+                            print(f"ERROR: defaults: {child.tag} if=\"{child.attrs['if']}\": {e}")
+                            continue
+                    self.addDefaultRule(child.tag, conditions, {k: v for k, v in child.attrs.items() if k != "if"})
+                continue
             if n.children:
                 self.scanDefaults(n.children)
+
+    @staticmethod
+    def defaultLabel(tag, conditions):
+        """widget, widget[render=Listbox], widget[itemCornerRadius]: the name of a default in the log."""
+        return tag + "".join(f"[{conditionText(condition)}]" for condition in conditions)
+
+    def noteSourceAttrs(self, raw_attrs, redundant):
+        """For --redundant: counts the attributes that an element sets in its source (raw_attrs, with the _src that says
+        where), and of these the ones that are redundant (the same as what the defaults would fill in)."""
+        source = raw_attrs.get("_src")
+        if source is None:
+            return
+        for key in raw_attrs:
+            if key != "_src":
+                counts = self.redundant_report.setdefault((source, key), [0, 0])
+                counts[0] += 1
+                counts[1] += key in redundant
+
+    def conditionAttrs(self):
+        """The attributes that any default has a condition on: they have to stay in the source, a default may depend on them."""
+        return {condition[0] for rules in self.default_rules.values() for rule in rules.values() for condition in rule["conditions"]}
+
+    def matchingDefaults(self, tag, attrs):
+        """The defaults that apply to an element with these attributes, the one that wins first."""
+        matching = [rule for rule in (self.default_rules.get(tag) or {}).values()
+                    if all(conditionHolds(condition, attrs) for condition in rule["conditions"])]
+        matching.sort(key=lambda rule: (len(rule["conditions"]), rule["order"]), reverse=True)
+        return matching
+
+    def defaultValue(self, tag, key, attrs):
+        """What the defaults say for an attribute of an element with these attributes (as written), or None. For what the
+        compiler itself reads from the source of an element (the resolution of a screen), which then is the same as
+        when the screen says it."""
+        for rule in self.matchingDefaults(tag, attrs):
+            if key in rule["values"]:
+                return rule["values"][key]
+        return None
+
+    def applyDefaults(self, tag, attrs, raw_attrs=None):
+        """Fills in the attributes that the element does not set itself (attrs, resolved) from the defaults that apply to
+        it. What applies is decided from the attributes the element has in its source, before anything is filled in.
+        raw_attrs: the attributes as written, only for --redundant."""
+        matching = self.matchingDefaults(tag, attrs)
+        if self.redundant_report is not None and raw_attrs is not None:
+            # An attribute is redundant if what is written is exactly what the default that wins for it says (the text, not the
+            # value it comes to: the text means the same in every skin the part is compiled into), and no default depends on it.
+            winner = {}
+            for rule in matching:
+                for key, value in rule["values"].items():
+                    winner.setdefault(key, value)
+            conditions = self.conditionAttrs()
+            self.noteSourceAttrs(raw_attrs, {k for k, v in winner.items() if raw_attrs.get(k) == v and k not in conditions})
+        for rule in matching:
+            label = self.defaultLabel(tag, rule["conditions"])
+            for key, value in rule["values"].items():
+                if key in attrs:
+                    continue
+                value = self.resolveValue(value, key)
+                self.checkColor(key, value)
+                attrs[key] = value
+                self.default_filled[(tag, label, key)] = self.default_filled.get((tag, label, key), 0) + 1
+
+    def printDefaultsReport(self):
+        """What the defaults filled in, for the log: one line per default and attribute."""
+        if not self.default_filled:
+            return
+        print("==> defaults: what the default widgets filled in (rule, attribute: elements)")
+        for (_tag, label, key), count in sorted(self.default_filled.items()):
+            print(f"==> defaults: {label} {key}: {count}")
 
     def offsetPositions(self, node, pos):
         """Applies a position=(x,y) offset to every element anywhere in
@@ -780,9 +931,34 @@ class XMLInclude:
                     max_y = cy if max_y is None else max(max_y, cy)
         return None if max_x is None else (max_x, max_y)
 
-    def exposeIncludeAttrs(self, attrs):
+    @staticmethod
+    def scanParams(doc):
+        """The parameters that an included file declares for itself, as {name: default or None}, or None if it declares
+        none: <param name="x" default="y"/> (no default: the includer has to give it), as siblings at the top of the file
+        or as direct children of its one root element."""
+        nodes = doc if isinstance(doc, list) else [doc]
+        if len(nodes) == 1 and isinstance(nodes[0], Element) and nodes[0].children:
+            nodes = nodes + [c for c in nodes[0].children if isinstance(c, Element)]
+        params = {n.attrs["name"]: n.attrs.get("default") for n in nodes
+                  if isinstance(n, Element) and n.tag == "param" and "name" in n.attrs}
+        return params or None
+
+    @staticmethod
+    def checkIncludeParams(inc_filename, attrs, params):
+        """Reports what an <xmlinc> gives to a file that declares its parameters wrongly: a parameter that is missing
+        and has no default, and an attribute that is no parameter (a typo, most likely)."""
+        for name, default in params.items():
+            if default is None and name not in attrs:
+                print(f"ERROR: include {inc_filename}: parameter {name} is required")
+        for key in attrs:
+            if key not in params and key not in {"file", "position", "size"}:
+                print(f"WARNING: include {inc_filename}: {key} is not a parameter of it (parameters: {', '.join(params)})")
+
+    def exposeIncludeAttrs(self, attrs, params=None):
         """Registers the attributes of an <xmlinc> other than file and position as $vars (size also as
-        $width/$height) and checks the fonts."""
+        $width/$height) and checks the fonts. params: the parameters that the included file declares (scanParams):
+        one that the <xmlinc> does not give gets its default - a required one that is not given is not set at all, not
+        even to a global of the same name, so the error that it is missing is the one the file gets."""
         resolved_attrs = {}
         for key, value in attrs.items():
             if key in {"file", "position"}:
@@ -794,6 +970,12 @@ class XMLInclude:
                 self.globals["$width"] = w
                 self.globals["$height"] = h
             self.globals["$" + key] = value
+        for name, default in (params or {}).items():
+            if name not in attrs:
+                if default is None:
+                    self.globals.pop("$" + name, None)
+                else:
+                    self.globals["$" + name] = self.resolveValue(default, name)
         self.checkFonts(resolved_attrs)
 
     def restoreSize(self, saved_size):
@@ -841,7 +1023,16 @@ class XMLInclude:
         # $width/$height (and anything resolved against them, like this
         # include's position=) are not clobbered by a nested include's size.
         saved_size = (self.globals.get("$width"), self.globals.get("$height"))
-        self.exposeIncludeAttrs(attrs)
+        # The parameters that the file declares (<param>) are its own: they are put back after the include, so one that
+        # an include gives does not stay behind for the includes that follow. The attributes of an <xmlinc> to a file
+        # that declares none are globals from here on, as they always were (a screen can pass dialog_width to its
+        # frame and use it for the rest of the screen).
+        params = self.scanParams(inc_doc)
+        saved_params = {}
+        if params:
+            self.checkIncludeParams(inc_filename, attrs, params)
+            saved_params = {"$" + name: self.globals.get("$" + name) for name in params}
+        self.exposeIncludeAttrs(attrs, params)
 
         # A file whose root <screen> carries frame="..." is a frame (a window drawn on the screen). The
         # content of a screen that places a frame is positioned relative to the frame's origin, see
@@ -862,6 +1053,11 @@ class XMLInclude:
 
         if "size" in attrs:
             self.restoreSize(saved_size)
+        for var, value in saved_params.items():
+            if value is None:
+                self.globals.pop(var, None)
+            else:
+                self.globals[var] = value
 
         # Auto-expose the included content's own intrinsic bounding box as
         # $child_width/$child_height, so a parent can size/position things
@@ -980,6 +1176,10 @@ class XMLInclude:
             self.globals["$" + node.attrs["name"]] = self.resolveValue(node.attrs["value"])
             return None
 
+        if node.tag == "param":
+            # The declaration of a parameter of the file, read by processInclude() before the file is processed.
+            return None
+
         if node.tag == "local":
             # Like <global>, but only for the rest of this file: processFile() drops the file's variables when it is
             # done, and an include of another file never sees them (hand a value on as an attribute of the <xmlinc>).
@@ -987,10 +1187,11 @@ class XMLInclude:
             self.localVars()["$" + node.attrs["name"]] = self.resolveValue(node.attrs["value"])
             return None
 
-        if node.tag == "default":
+        if isDefaultElement(node.tag):
             # Already picked up by scanDefaults() before this file's
-            # elements were processed - a <default> is build-time only,
-            # like <global>, and never appears in the compiled output.
+            # elements were processed - a <default> (or <defaults>) is
+            # build-time only, like <global>, and never appears in the
+            # compiled output.
             return None
 
         if node.tag == "screen":
@@ -1005,7 +1206,7 @@ class XMLInclude:
             # collectAttributes()/context.parse() (skin.py) requires an
             # actual size= there, and papering over a missing one here
             # would just hide that source error instead of surfacing it.
-            size_attr = node.attrs.get("size") or node.attrs.get("resolution")
+            size_attr = node.attrs.get("size") or node.attrs.get("resolution") or self.defaultValue("screen", "resolution", node.attrs)
             if size_attr:
                 w, h = self.resolveValue(size_attr, "size").split(",")
                 self.globals["$screen_width"] = w
@@ -1047,24 +1248,10 @@ class XMLInclude:
             self.checkColor(key, value)
             new_attrs[key] = value
         if "Summary" not in self.current_file:
-            tag_defaults = self.defaults.get(node.tag, {})
-            render_value = new_attrs.get("render")
-            default_dicts = []
-            if render_value is not None and render_value in tag_defaults:
-                default_dicts.append(tag_defaults[render_value])
-            for selector, values in tag_defaults.items():
-                if selector.startswith("has:") and selector[4:] in new_attrs:
-                    default_dicts.append(values)
-            if "*" in tag_defaults:
-                default_dicts.append(tag_defaults["*"])
-            for defaults in default_dicts:
-                for key, value in defaults.items():
-                    if key in new_attrs:
-                        continue
-                    value = self.resolveValue(value, key)
-                    self.checkColor(key, value)
-                    new_attrs[key] = value
+            self.applyDefaults(node.tag, new_attrs, node.attrs)
             self.checkFonts(new_attrs)
+        elif self.redundant_report is not None:
+            self.noteSourceAttrs(node.attrs, ())    # no defaults in a Summary: nothing in it is redundant
 
         new_children = None
         placed_origin = None
@@ -1148,6 +1335,11 @@ def parseArgs(argv):
     parser.add_argument("-o", dest="srcoutfile", required=True, help="destination file")
     parser.add_argument("-d", dest="dstdir", required=True, help="destination dir")
     parser.add_argument("-c", dest="cmndir", required=True, help="common dir")
+    parser.add_argument("--marks", dest="marks", action="store_true",
+                        help="the .ymlinc that are converted on the way give every element an _src=\"path:line\" (for --redundant)")
+    parser.add_argument("--redundant", dest="redundant", default=None, metavar="FILE",
+                        help="write to FILE which attributes of the sources are the same as the defaults (needs --marks): "
+                             "one line per source element and attribute: path:line, attribute, how often compiled, how often redundant")
     parser.add_argument("-s", dest="screens", action="append", default=None, metavar="SCREEN",
                         help="compile only this screen_* file (name with or without extension, repeatable); the "
                              "other screen_* includes of the source file are skipped - see xmlcompilescreen")
@@ -1171,7 +1363,12 @@ def xmlinc(argv):
     print("dst dir: " + dstdir)
     print("cmn dir: " + cmndir)
 
+    global markSources, markFullPath    # pylint: disable=global-statement
+    if args.redundant or args.marks:
+        markSources = markFullPath = True
     inc = XMLInclude(srcdir, dstdir, cmndir)
+    if args.redundant:
+        inc.redundant_report = {}
     if args.screens:
         inc.screen_filter = {os.path.splitext(os.path.basename(s))[0] for s in args.screens}
     result = inc.processFile(0, srcinfile)
@@ -1189,6 +1386,10 @@ def xmlinc(argv):
         renderNode(node, lines)
     output = "\n".join(lines) + "\n"
     writeFile(srcoutfile, output)
+    inc.printDefaultsReport()
+    if args.redundant:
+        lines = [f"{source}\t{key}\t{counts[0]}\t{counts[1]}" for (source, key), counts in sorted(inc.redundant_report.items())]
+        writeFile(args.redundant, "\n".join(lines) + "\n")
 
     # print("xmlinc done.")
 
