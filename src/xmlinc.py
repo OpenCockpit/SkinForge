@@ -488,6 +488,8 @@ class XMLInclude:
         self.screen_filter = None
         self.screen_include_depth = 0  # how many screen_* files are being processed: their includes are never skipped
         self.target_screens = set()    # id() of the <screen> elements that came from the files of screen_filter
+        self.last_include = None       # (file, attributes of the <screen> root) of the include that was processed last
+        self.warned_screen_attrs = set()   # (file, attributes) already reported
 
     def inSkin(self):
         """True while the skin itself is being processed, not a screen_* file it includes."""
@@ -1094,6 +1096,7 @@ class XMLInclude:
         else:
             self.frame_origin = None
 
+        self.last_include = (inc_filename, dict(inc_doc.attrs)) if isinstance(inc_doc, Element) and inc_doc.tag == "screen" else None
         if isinstance(result, list):
             for r in result:
                 if isinstance(r, Element):
@@ -1115,6 +1118,28 @@ class XMLInclude:
             return value
         screen = (int(self.globals["$screen_width"]), int(self.globals["$screen_height"]))
         return ",".join(str((screen[i] - box[i]) // 2) if seg.strip() == "center" else seg for i, seg in enumerate(segments))
+
+    # What a <screen> root of an included file still does where the file is included inside another element (and the root is
+    # dropped by unwrapScreens): its name (for messages), frame (the file is a frame, see processInclude), and size or resolution
+    # (they give $screen_width and $screen_height while the file is processed). Anything else on the root (position, title, ...) is
+    # without effect, which is easily taken for the opposite.
+    # Reported for the parts only (screenpart_ and the like): a screen_ file is a screen of its own and its root is meant for that.
+    SCREEN_ROOT_ATTRS_USED = ("name", "frame", "size", "resolution")
+
+    def warnDiscardedScreenAttrs(self, result):
+        """Reports the attributes of the <screen> root of the file that was just included that unwrapScreens() is about to drop."""
+        items = result if isinstance(result, list) else [result]
+        if not self.last_include or not any(isinstance(item, Element) and item.tag == "screen" for item in items):
+            return
+        inc_filename, attrs = self.last_include
+        if os.path.basename(inc_filename).startswith("screen_"):
+            return      # a screen of its own: the attributes of its root count where it is a screen, and it is also used as a base of others
+        ignored = tuple(key for key in attrs if key not in self.SCREEN_ROOT_ATTRS_USED)
+        if not ignored or (inc_filename, ignored) in self.warned_screen_attrs:
+            return
+        self.warned_screen_attrs.add((inc_filename, ignored))
+        print(f"WARNING: include {inc_filename}: the <screen> root attribute(s) {', '.join(ignored)} have no effect where the file is "
+              f"included inside another element (only {', '.join(self.SCREEN_ROOT_ATTRS_USED)} are used)")
 
     @staticmethod
     def unwrapScreens(result):
@@ -1269,6 +1294,7 @@ class XMLInclude:
                     # reference (<panel name="X"/> in the original skin): when
                     # the included file is a whole <screen name="X"> definition,
                     # its content - not the <screen> wrapper - belongs here.
+                    self.warnDiscardedScreenAttrs(result)
                     result = self.unwrapScreens(result)
                 start = len(new_children)
                 if isinstance(result, list):
