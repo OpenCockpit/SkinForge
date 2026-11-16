@@ -120,6 +120,9 @@ TEXT_BODY_TAGS = {"applet", "convert"}
 # compiler only or have a text body of their own: they are not drawn, and an _src would be taken for a variable on an
 # <xmlinc>.
 MARK_ATTR = "_src"
+# The <screen> root of a file that is a part (screenpart_ and the like, not screen_*, which is a screen of its own, see xmlinc's
+# warnDiscardedScreenAttrs) is dropped where the file is included: it is not drawn and has no attributes that count except name,
+# frame, size and resolution, so it gets no mark (an _src there would be reported as a root attribute without effect).
 NO_MARK_TAGS = {"xmlinc", "global", "local", "param", "default", "defaults", "screenfamily", "layout", "applet", "convert"}
 
 
@@ -872,6 +875,11 @@ def renderNode(tag, body, level, lines, mark=None, line=None):
         lines.append(f"{prefix}<{tag}{attr_str}/>")
 
 
+def isScreenPart(mark):
+    """True if the file that mark names is a part, not a screen of its own: a root <screen> of it is dropped when it is included."""
+    return not os.path.basename(mark).startswith("screen_")
+
+
 def yml2xml(text, is_full_document, mark=None):
     """mark: the name of the source file, to have every element carry an _src="name:line" attribute (see
     MARK_ATTR); None for the plain conversion."""
@@ -892,12 +900,13 @@ def yml2xml(text, is_full_document, mark=None):
             if isinstance(item, Commented) and item.comment:
                 lines.append(f"<!-- {item.comment} -->")
             (tag, body), = unwrap(item).items()
-            renderNode(tag, body, 0, lines, mark, item.line if isinstance(item, Commented) else None)
+            line = item.line if isinstance(item, Commented) else None
+            renderNode(tag, body, 0, lines, mark, None if tag == "screen" and mark and isScreenPart(mark) else line)
     else:
         root_items = list(root.items())
         assert len(root_items) == 1, "document root must have exactly one top-level key"
         tag, body = root_items[0]
-        renderNode(tag, body, 0, lines, mark, parser.root_line)
+        renderNode(tag, body, 0, lines, mark, None if tag == "screen" and mark and isScreenPart(mark) else parser.root_line)
     return "\n".join(lines) + "\n"
 
 
