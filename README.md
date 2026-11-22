@@ -49,4 +49,4 @@ xmlcompilescreen <domain> <screen_file> [srcbase] [dstbase] [cmnbase]
 The other screens are not touched, so a change somewhere else (the globals, a part several screens include) needs a
 full compile.
 ## Wiki
-- https://github.com/OpenCockpit/SkinForge/wiki
+- https://github.com/xcentaurix/SkinForge/wiki
