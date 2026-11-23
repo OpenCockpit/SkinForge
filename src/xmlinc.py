@@ -1193,6 +1193,10 @@ class XMLInclude:
                 include_attrs = {"file": body, "position": body_position}
                 if "content" in merged:
                     include_attrs["content"] = merged.pop("content")
+                # and so is every content_<name>="...": a value for the frame about its body (content_dx and content_dy, how
+                # far the body starts inside the body rectangle of the frame), a parameter of the frame like content itself
+                for key in [k for k in merged if k.startswith("content_")]:
+                    include_attrs[key] = merged.pop(key)
                 body_include = Element("xmlinc", include_attrs, None, None)
                 screens.append(self.processElement(level, Element("screen", dict(sorted(merged.items())), [body_include], None)))
             return screens
