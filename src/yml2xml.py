@@ -885,6 +885,12 @@ def yml2xml(text, is_full_document, mark=None):
     MARK_ATTR); None for the plain conversion."""
     parser = YamlParser(text)
     root = parser.parseDocument()
+    if root is None:
+        # nothing in it (empty, or only comments): a part that is still to be written, a placeholder. It has no elements, so it
+        # adds none where it is included. A skin with nothing in it is no skin.
+        if is_full_document:
+            raise ValueError("the document is empty: a skin needs a root element")
+        return ""
     lines = []
     if is_full_document:
         # Matches xmlpretty.py's minidom.toprettyxml() output exactly (no

@@ -470,6 +470,9 @@ class XMLInclude:
         # the default widgets (<defaults>): tag -> {conditions: {"values", "order", "conditions"}}, see scanDefaults
         self.default_rules = {}
         self.default_order = 0
+        # The Summary files (the screens of the display) get no defaults: those of a main skin are not meant for them. A display skin has
+        # defaults of its own for exactly these (display_defaults.ymlinc, and not defaults.ymlinc): from its being included on, they do.
+        self.summary_defaults = False
         self.default_filled = {}   # (tag, rule, attribute) -> how many elements got the attribute from that rule
         # --redundant: (_src, attribute) -> [how often the element was compiled with it, how often the attribute was the same as the
         # default that would have been filled in], see applyDefaults. None: not asked for.
@@ -1019,6 +1022,8 @@ class XMLInclude:
             raise XmlParseError(f"{inc_file}: {e}") from None
         self.scanColors(inc_doc)
         self.scanDefaults(inc_doc)
+        if os.path.basename(inc_file).startswith("display_defaults."):
+            self.summary_defaults = True
 
         # size= exposes $width/$height only for the duration of this include:
         # they are put back afterwards, so the enclosing file's own
@@ -1279,6 +1284,8 @@ class XMLInclude:
         if "Summary" not in self.current_file:
             self.applyDefaults(node.tag, new_attrs, node.attrs)
             self.checkFonts(new_attrs)
+        elif self.summary_defaults:
+            self.applyDefaults(node.tag, new_attrs, node.attrs)    # the fonts of the display are none of the skin's: no check
         elif self.redundant_report is not None:
             self.noteSourceAttrs(node.attrs, ())    # no defaults in a Summary: nothing in it is redundant
 
